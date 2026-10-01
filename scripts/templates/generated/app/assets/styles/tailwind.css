@@ -1,0 +1,17 @@
+/* Tailwind CSS 4 的入口（CSS-first 配置，不再有 tailwind.config.js）。
+ *
+ * 为什么必须在 css 数组里排第一：Tailwind 的 preflight 会重置原生元素的默认外观。
+ * 它排在 tokens.css 与 base.css 之前，自定义样式才能正常覆盖；
+ * 顺序错了的表现是「按钮、标题的默认样式莫名其妙」，而且不会有任何报错。
+ *
+ * 选了 Nuxt UI 时，`app/assets/styles/ui-nuxt.css` 会作为另一个入口排在最后，
+ * 两个文件之间没有 @import 关系 —— 依赖「数组里的先后顺序」而不是「文件里的先后顺序」，
+ * 这样单独选 Tailwind（不选 Nuxt UI）时也不会引用到不存在的文件。
+ */
+@import 'tailwindcss';
+
+/* 主题扩展写在这里。整个文件由引擎按模板生成一次，之后它不再认领内容，随你怎么改。 */
+@theme {
+  --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace;
+}

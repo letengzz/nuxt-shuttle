@@ -1,0 +1,98 @@
+// ===========================================================================
+// 令牌层：唯一的颜色 / 尺寸来源。这是 **Stylus 变体**（tokens.styl）。
+//
+// 两点关于 Stylus 的实话：
+//   ① 变量不用前缀（`brand-500 = #00dc82`），干净，但与 CSS 属性名只差一个空格，
+//      写错时不会报错，只会静默变成一条无效声明；
+//   ② Stylelint 对 Stylus 的支持有限，所以选它时不会生成 stylelint.config.mjs。
+//
+// 为什么下面的 :root 块是**字面值**而不是引用上面的变量：
+// 自定义属性（--x）的值是否参与 Stylus 的变量求值，本模板没有实测过。
+// 没实测过的行为不写进产物 —— 令牌层一旦静默失效，症状是「全站掉色」，
+// 而报错为 0、构建成功，属于最难定位的一类问题。宁可在这里重复一遍数值。
+// ===========================================================================
+
+// --- 品牌色阶（供 <style lang="stylus"> 里使用）---------------------------
+brand-50 = #effdf5
+brand-500 = #00dc82
+brand-600 = #00c16a
+brand-700 = #007f45
+
+// --- 语义色（浅色）-------------------------------------------------------
+bg = #ffffff
+bg-subtle = #f8fafc
+fg = #0f172a
+fg-muted = #64748b
+border = #e2e8f0
+danger = #dc2626
+danger-bg = #fef2f2
+warn = #d97706
+warn-bg = #fffbeb
+info = #475569
+info-bg = #f1f5f9
+
+// --- 间距 / 圆角 / 排版 / 动效 -------------------------------------------
+sp-1 = 4px
+sp-2 = 8px
+sp-3 = 12px
+sp-4 = 16px
+sp-6 = 24px
+sp-8 = 32px
+radius = 8px
+radius-lg = 12px
+
+font-sans = system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif
+font-mono = ui-monospace, 'Cascadia Code', Consolas, monospace
+text-sm = 0.875rem
+text-base = 1rem
+text-lg = 1.125rem
+ease = cubic-bezier(0.16, 1, 0.3, 1)
+
+:root {
+  --brand-50: #effdf5
+  --brand-500: #00dc82
+  --brand-600: #00c16a
+  --brand-700: #007f45
+
+  --bg: #ffffff
+  --bg-subtle: #f8fafc
+  --fg: #0f172a
+  --fg-muted: #64748b
+  --border: #e2e8f0
+  --danger: #dc2626
+  --danger-bg: #fef2f2
+  --warn: #d97706
+  --warn-bg: #fffbeb
+  --info: #475569
+  --info-bg: #f1f5f9
+
+  --sp-1: 4px
+  --sp-2: 8px
+  --sp-3: 12px
+  --sp-4: 16px
+  --sp-6: 24px
+  --sp-8: 32px
+  --radius: 8px
+  --radius-lg: 12px
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif
+  --font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace
+  --text-sm: 0.875rem
+  --text-base: 1rem
+  --text-lg: 1.125rem
+  --ease: cubic-bezier(0.16, 1, 0.3, 1)
+}
+
+// 暗色适配只在这一处覆盖语义名。
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1120
+    --bg-subtle: #111827
+    --fg: #e2e8f0
+    --fg-muted: #94a3b8
+    --border: #1f2937
+    --danger-bg: #2a1315
+    --warn-bg: #2a2110
+    --info-bg: #16202e
+  }
+}

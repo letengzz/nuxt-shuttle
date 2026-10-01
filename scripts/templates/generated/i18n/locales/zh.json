@@ -1,0 +1,19 @@
+{
+  "app": {
+    "title": "Nuxt Shuttle",
+    "description": "一个 Nuxt 起步模板"
+  },
+  "nav": {
+    "home": "首页",
+    "about": "关于"
+  },
+  "action": {
+    "save": "保存",
+    "cancel": "取消",
+    "retry": "重试"
+  },
+  "error": {
+    "notFound": "页面不存在",
+    "network": "网络异常，请稍后重试"
+  }
+}

@@ -1,0 +1,108 @@
+// ===========================================================================
+// 令牌层：唯一的颜色 / 尺寸来源。这是 **Sass 变体**（tokens.scss）。
+//
+// 每一组令牌都给出两种形式，这是刻意的：
+//   · Sass 变量（$brand-500）—— 给你在 <style lang="scss"> 里做计算与 map 遍历
+//   · CSS 变量（--brand-500）—— 给组件与运行时覆盖（含暗色模式）
+// 只给其中一种是常见做法，但那样要么失去编译期能力，要么失去运行时能力。
+//
+// 纪律：本文件不含任何选择器与布局，只有变量声明与一个 :root 块。
+// ===========================================================================
+
+// --- 品牌色阶 -------------------------------------------------------------
+$brand-50: #effdf5;
+$brand-500: #00dc82;
+$brand-600: #00c16a;
+$brand-700: #007f45;
+
+$brands: (
+  'brand-50': $brand-50,
+  'brand-500': $brand-500,
+  'brand-600': $brand-600,
+  'brand-700': $brand-700,
+);
+
+// --- 语义色（浅色）-------------------------------------------------------
+$bg: #ffffff;
+$bg-subtle: #f8fafc;
+$fg: #0f172a;
+$fg-muted: #64748b;
+$border: #e2e8f0;
+$danger: #dc2626;
+$danger-bg: #fef2f2;
+$warn: #d97706;
+$warn-bg: #fffbeb;
+$info: #475569;
+$info-bg: #f1f5f9;
+
+// --- 间距 / 圆角 / 排版 / 动效 -------------------------------------------
+$sp-1: 4px;
+$sp-2: 8px;
+$sp-3: 12px;
+$sp-4: 16px;
+$sp-6: 24px;
+$sp-8: 32px;
+$radius: 8px;
+$radius-lg: 12px;
+
+$font-sans: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+$font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+$text-sm: 0.875rem;
+$text-base: 1rem;
+$text-lg: 1.125rem;
+$ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+// --- 暗色覆盖 ------------------------------------------------------------
+$dark: (
+  'bg': #0b1120,
+  'bg-subtle': #111827,
+  'fg': #e2e8f0,
+  'fg-muted': #94a3b8,
+  'border': #1f2937,
+  'danger-bg': #2a1315,
+  'warn-bg': #2a2110,
+  'info-bg': #16202e,
+);
+
+// 用 map 生成 :root 与暗色块：新增一个令牌只改上面几行，不用在下面补两处。
+:root {
+  // 设计稿与实现之间只隔这一层：业务组件永远只引用 --语义名。
+  --brand-50: #{$brand-50};
+  --brand-500: #{$brand-500};
+  --brand-600: #{$brand-600};
+  --brand-700: #{$brand-700};
+
+  --bg: #{$bg};
+  --bg-subtle: #{$bg-subtle};
+  --fg: #{$fg};
+  --fg-muted: #{$fg-muted};
+  --border: #{$border};
+  --danger: #{$danger};
+  --danger-bg: #{$danger-bg};
+  --warn: #{$warn};
+  --warn-bg: #{$warn-bg};
+  --info: #{$info};
+  --info-bg: #{$info-bg};
+
+  --sp-1: #{$sp-1};
+  --sp-2: #{$sp-2};
+  --sp-3: #{$sp-3};
+  --sp-4: #{$sp-4};
+  --sp-6: #{$sp-6};
+  --sp-8: #{$sp-8};
+  --radius: #{$radius};
+  --radius-lg: #{$radius-lg};
+
+  --text-sm: #{$text-sm};
+  --text-base: #{$text-base};
+  --text-lg: #{$text-lg};
+  --ease: #{$ease};
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    @each $name, $value in $dark {
+      --#{$name}: #{$value};
+    }
+  }
+}

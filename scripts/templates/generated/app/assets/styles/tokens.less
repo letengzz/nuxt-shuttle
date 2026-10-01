@@ -1,0 +1,91 @@
+// ===========================================================================
+// 令牌层：唯一的颜色 / 尺寸来源。这是 **Less 变体**（tokens.less）。
+//
+// Less 没有 Sass 的 map 与 @each，所以暗色块逐条写。这是语言能力差异，
+// 不是设计取舍 —— 与其硬造一个 mixin 让代码看起来「对称」，
+// 不如让每种变体都用各自最自然的写法，用户读起来才不费劲。
+//
+// 纪律：本文件不含任何选择器与布局，只有变量声明与 :root 块。
+// ===========================================================================
+
+// --- 品牌色阶 -------------------------------------------------------------
+@brand-50:  #effdf5;
+@brand-500: #00dc82;
+@brand-600: #00c16a;
+@brand-700: #007f45;
+
+// --- 语义色（浅色）-------------------------------------------------------
+@bg:        #ffffff;
+@bg-subtle: #f8fafc;
+@fg:        #0f172a;
+@fg-muted:  #64748b;
+@border:    #e2e8f0;
+@danger:    #dc2626;
+@danger-bg: #fef2f2;
+@warn:      #d97706;
+@warn-bg:   #fffbeb;
+@info:      #475569;
+@info-bg:   #f1f5f9;
+
+// --- 间距 / 圆角 / 排版 / 动效 -------------------------------------------
+@sp-1: 4px;
+@sp-2: 8px;
+@sp-3: 12px;
+@sp-4: 16px;
+@sp-6: 24px;
+@sp-8: 32px;
+@radius: 8px;
+@radius-lg: 12px;
+
+@font-sans: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+@font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+@text-sm: 0.875rem;
+@text-base: 1rem;
+@text-lg: 1.125rem;
+@ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+:root {
+  --brand-50:  @brand-50;
+  --brand-500: @brand-500;
+  --brand-600: @brand-600;
+  --brand-700: @brand-700;
+
+  --bg:        @bg;
+  --bg-subtle: @bg-subtle;
+  --fg:        @fg;
+  --fg-muted:  @fg-muted;
+  --border:    @border;
+  --danger:    @danger;
+  --danger-bg: @danger-bg;
+  --warn:      @warn;
+  --warn-bg:   @warn-bg;
+  --info:      @info;
+  --info-bg:   @info-bg;
+
+  --sp-1: @sp-1;
+  --sp-2: @sp-2;
+  --sp-3: @sp-3;
+  --sp-4: @sp-4;
+  --sp-6: @sp-6;
+  --sp-8: @sp-8;
+  --radius: @radius;
+  --radius-lg: @radius-lg;
+
+  --text-sm: @text-sm;
+  --text-base: @text-base;
+  --text-lg: @text-lg;
+  --ease: @ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #0b1120;
+    --bg-subtle: #111827;
+    --fg:        #e2e8f0;
+    --fg-muted:  #94a3b8;
+    --border:    #1f2937;
+    --danger-bg: #2a1315;
+    --warn-bg:   #2a2110;
+    --info-bg:   #16202e;
+  }
+}

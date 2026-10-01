@@ -1,0 +1,37 @@
+# 构建上下文里不需要的东西。
+#
+# 这一份不是「省流量」用的，而是**正确性**用的：如果 .output 或 node_modules 被拷进
+# 构建层，宿主机的陈旧产物会盖住镜像里新构建的结果，症状是「本地明明改了，镜像里是旧的」。
+# 构建阶段只该看到源码与锁定文件。
+
+# 依赖与构建缓存：镜像内部会重新装、重新构建
+node_modules
+.nuxt
+.output
+.cache
+
+# 版本控制与编辑器
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+
+# 初始化引擎的痕迹：不该进产物镜像
+.init-backup
+template.init.lock
+template.config.json
+.wizard-selection.json
+
+# 本地环境与日志
+.env
+.env.*
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 文档与测试：运行期用不到
+README.md
+*.md
+test
+coverage

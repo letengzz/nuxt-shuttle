@@ -1,0 +1,477 @@
+{
+  "version": "1.0.0",
+  "groups": [
+    {
+      "key": "ui",
+      "label": "UI 框架",
+      "column": "left",
+      "multiple": false,
+      "renderAs": "radios",
+      "default": "none",
+      "desc": "决定组件从哪来。列表里的每一行小字写清了「选了会装什么」——选择成本主要来自不确定。",
+      "options": [
+        {
+          "value": "none",
+          "label": "不使用组件库",
+          "desc": "纯手写 CSS 与原生元素",
+          "note": "不装任何 UI 包，体积最小",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "element-plus",
+          "label": "Element Plus",
+          "desc": "国内生态最全的 Vue 3 组件库",
+          "note": "element-plus + @element-plus/nuxt（自动导入）+ element-plus/dist/index.css",
+          "deps": ["element-plus"],
+          "devDeps": ["@element-plus/nuxt"],
+          "modules": ["@element-plus/nuxt"],
+          "files": [],
+          "css": [{ "path": "element-plus/dist/index.css", "slot": "ui" }]
+        },
+        {
+          "value": "ant-design-vue",
+          "label": "Ant Design Vue",
+          "desc": "企业级中后台，偏 B 端设计语言",
+          "note": "ant-design-vue + dayjs + @ant-design-vue/nuxt + reset.css",
+          "deps": ["ant-design-vue", "dayjs"],
+          "devDeps": ["@ant-design-vue/nuxt"],
+          "modules": ["@ant-design-vue/nuxt"],
+          "files": [],
+          "css": [{ "path": "ant-design-vue/dist/reset.css", "slot": "ui" }]
+        },
+        {
+          "value": "nuxt-ui",
+          "label": "Nuxt UI",
+          "desc": "面向 C 端的现代设计语言，自带深色模式",
+          "note": "@nuxt/ui + tailwindcss（必须显式安装）+ 两行 @import",
+          "deps": ["@nuxt/ui", "tailwindcss"],
+          "devDeps": [],
+          "modules": ["@nuxt/ui"],
+          "files": ["app/assets/styles/tailwind.css", "app/assets/styles/ui-nuxt.css"],
+          "css": [
+            { "path": "~/assets/styles/tailwind.css", "slot": "base" },
+            { "path": "~/assets/styles/ui-nuxt.css", "slot": "ui" }
+          ]
+        },
+        {
+          "value": "vuetify",
+          "label": "Vuetify",
+          "desc": "Material Design 3 体系，跨端视觉一致",
+          "note": "vuetify + vuetify-nuxt-module（仍是 1.0.0-rc 线，默认禁用）",
+          "deps": ["vuetify"],
+          "devDeps": ["vuetify-nuxt-module"],
+          "modules": ["vuetify-nuxt-module"],
+          "files": [],
+          "css": [],
+          "experimental": true,
+          "experimentalReason": "vuetify-nuxt-module 的 npm latest 仍停在 0.19.x，1.0.0-rc 线在 minor 之间可能带破坏性变更；而模板承诺的是「可复现的产物」。需要它请用 CLI 的 --force-experimental 显式打开。"
+        }
+      ]
+    },
+    {
+      "key": "preprocessor",
+      "label": "CSS 预处理器",
+      "column": "left",
+      "multiple": false,
+      "renderAs": "radios",
+      "default": "none",
+      "desc": "决定你自己写的样式用什么语法。它与原子化框架正交，唯一需要协调的是入口顺序。",
+      "options": [
+        {
+          "value": "none",
+          "label": "不使用预处理器",
+          "desc": "组件内 <style scoped>，跨组件复用靠 CSS 变量",
+          "note": "tokens.css + base.css，零额外依赖",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": [{ "path": "~/assets/styles/tokens.css", "slot": "tokens" }]
+        },
+        {
+          "value": "sass",
+          "label": "Sass",
+          "desc": "生态最好，Vuetify / Tailwind 都原生兼容",
+          "note": "sass-embedded（比 sass 快）+ stylelint-config-standard-scss",
+          "deps": [],
+          "devDeps": ["sass-embedded", "stylelint", "stylelint-config-standard-scss"],
+          "modules": [],
+          "files": ["app/assets/styles/tokens.scss", "stylelint.config.mjs"],
+          "css": [{ "path": "~/assets/styles/tokens.scss", "slot": "tokens" }]
+        },
+        {
+          "value": "less",
+          "label": "Less",
+          "desc": "国内存量多，生态活跃度低于 Sass",
+          "note": "less + stylelint-config-standard-less",
+          "deps": [],
+          "devDeps": ["less", "stylelint", "stylelint-config-standard-less"],
+          "modules": [],
+          "files": ["app/assets/styles/tokens.less", "stylelint.config.mjs"],
+          "css": [{ "path": "~/assets/styles/tokens.less", "slot": "tokens" }]
+        },
+        {
+          "value": "stylus",
+          "label": "Stylus",
+          "desc": "语法最简，但工具链支持最弱",
+          "note": "stylus（Stylelint 对 Stylus 支持有限，标为尽力而为）",
+          "deps": [],
+          "devDeps": ["stylus"],
+          "modules": [],
+          "files": ["app/assets/styles/tokens.styl"],
+          "css": [{ "path": "~/assets/styles/tokens.styl", "slot": "tokens" }]
+        }
+      ]
+    },
+    {
+      "key": "atomic",
+      "label": "原子化框架",
+      "column": "left",
+      "multiple": false,
+      "renderAs": "radios",
+      "default": "none",
+      "desc": "原子化引擎生成工具类，与预处理器正交。它的 reset 必须排在自定义样式之前。",
+      "options": [
+        {
+          "value": "none",
+          "label": "不使用",
+          "desc": "只写语义类名与 CSS 变量",
+          "note": "不装任何原子化包",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "unocss",
+          "label": "UnoCSS",
+          "desc": "Attributify、纯 CSS 图标、变体组",
+          "note": "@unocss/nuxt + uno.config.ts（预设用 preset-wind4）",
+          "deps": [],
+          "devDeps": ["@unocss/nuxt", "unocss"],
+          "modules": ["@unocss/nuxt"],
+          "files": ["uno.config.ts"],
+          "css": [{ "path": "virtual:uno.css", "slot": "base" }]
+        },
+        {
+          "value": "tailwind",
+          "label": "Tailwind CSS",
+          "desc": "生态最大、文档最全，v4 是 CSS-first 配置",
+          "note": "tailwindcss + @tailwindcss/vite + assets/styles/tailwind.css",
+          "deps": [],
+          "devDeps": ["tailwindcss", "@tailwindcss/vite"],
+          "modules": [],
+          "files": ["app/assets/styles/tailwind.css"],
+          "css": [{ "path": "~/assets/styles/tailwind.css", "slot": "base" }],
+          "vitePlugin": {
+            "import": "import tailwindcss from '@tailwindcss/vite'",
+            "use": "tailwindcss()"
+          }
+        }
+      ]
+    },
+    {
+      "key": "render",
+      "label": "渲染模式",
+      "column": "right",
+      "multiple": false,
+      "renderAs": "cards",
+      "default": "ssr",
+      "desc": "决定产物形态与部署方式。三种模式在代码上完全相同，只差一个开关——所以初始化后想改不需要重跑引擎。",
+      "options": [
+        {
+          "value": "ssr",
+          "label": "SSR 服务端渲染",
+          "desc": "需要 SEO、首屏性能、个性化内容",
+          "note": "ssr: true，产物是 Node 服务",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "spa",
+          "label": "SPA 单页应用",
+          "desc": "后台管理系统、登录后才用",
+          "note": "ssr: false，纯静态 + 客户端路由",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "ssg",
+          "label": "SSG 静态生成",
+          "desc": "文档站、营销页",
+          "note": "nitro.preset = 'static'，构建命令改为 pnpm generate",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "hybrid",
+          "label": "混合渲染",
+          "desc": "首页预渲染 + 后台 SPA，大多数真实项目",
+          "note": "routeRules 逐路由指定 prerender / swr / ssr: false",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        }
+      ]
+    },
+    {
+      "key": "modules",
+      "label": "Nuxt 模块",
+      "column": "right",
+      "multiple": true,
+      "renderAs": "checks",
+      "default": ["pinia", "icon"],
+      "desc": "按需追加。每一项只影响依赖清单与 modules 数组，彼此正交。",
+      "options": [
+        {
+          "value": "pinia",
+          "label": "Pinia 状态管理",
+          "desc": "组合式 store；Nuxt 4 下仍需显式安装 pinia",
+          "note": "pinia + @pinia/nuxt + app/stores/app.ts",
+          "deps": ["pinia", "@pinia/nuxt"],
+          "devDeps": [],
+          "modules": ["@pinia/nuxt"],
+          "files": ["app/stores/app.ts"],
+          "css": []
+        },
+        {
+          "value": "vueuse",
+          "label": "VueUse 工具集",
+          "desc": "常用组合式函数，自动导入",
+          "note": "@vueuse/nuxt + @vueuse/core",
+          "deps": ["@vueuse/core"],
+          "devDeps": ["@vueuse/nuxt"],
+          "modules": ["@vueuse/nuxt"],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "i18n",
+          "label": "国际化 i18n",
+          "desc": "多语言路由与文案",
+          "note": "@nuxtjs/i18n + i18n/locales/*.json + nuxt.config.ts 的 i18n 段",
+          "deps": ["@nuxtjs/i18n"],
+          "devDeps": [],
+          "modules": ["@nuxtjs/i18n"],
+          "files": ["i18n/locales/en.json", "i18n/locales/zh.json"],
+          "css": [],
+          "config": "i18n: {\n  // prefix_except_default：默认语言不带前缀，其余语言带 /en 这样的前缀。\n  // 换成 'prefix' 会让中文也变成 /zh/，对国内项目通常不是想要的。\n  defaultLocale: 'zh',\n  strategy: 'prefix_except_default',\n  locales: [\n    { code: 'zh', language: 'zh-CN', file: 'zh.json' },\n    { code: 'en', language: 'en-US', file: 'en.json' },\n  ],\n},"
+        },
+        {
+          "value": "icon",
+          "label": "Nuxt Icon 图标",
+          "desc": "按需拉取图标字体，与组件库无关",
+          "note": "@nuxt/icon",
+          "deps": ["@nuxt/icon"],
+          "devDeps": [],
+          "modules": ["@nuxt/icon"],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "image",
+          "label": "Nuxt Image 图片",
+          "desc": "图片优化与响应式尺寸",
+          "note": "@nuxt/image（默认 ipx provider 需要服务端）",
+          "deps": ["@nuxt/image"],
+          "devDeps": [],
+          "modules": ["@nuxt/image"],
+          "files": [],
+          "css": [],
+          "allowBuilds": ["sharp"]
+        },
+        {
+          "value": "seo",
+          "label": "SEO 套件",
+          "desc": "sitemap、robots、结构化数据",
+          "note": "@nuxtjs/seo + nuxt.config.ts 的 site 段",
+          "deps": ["@nuxtjs/seo"],
+          "devDeps": [],
+          "modules": ["@nuxtjs/seo"],
+          "files": [],
+          "css": [],
+          "config": "site: {\n  // @nuxtjs/seo 需要一个**绝对** URL 才能生成 sitemap 与 canonical，\n  // 部署前把这里改成真实域名，否则 sitemap 里会是一串 example.com。\n  url: 'https://example.com',\n  name: 'Nuxt Shuttle',\n},"
+        }
+      ]
+    },
+    {
+      "key": "engineering",
+      "label": "工程开关",
+      "column": "right",
+      "multiple": true,
+      "renderAs": "checks",
+      "default": ["eslint", "test", "ts-strict"],
+      "desc": "决定生成哪些配置文件与门禁。默认值就是推荐组合，直接点「初始化」也能得到能跑的工程。",
+      "options": [
+        {
+          "value": "eslint",
+          "label": "ESLint + Prettier",
+          "desc": "flat config；ESLint 管对不对，Prettier 管好不好看",
+          "note": "eslint + @nuxt/eslint + prettier + eslint.config.mjs",
+          "deps": [],
+          "devDeps": ["eslint", "@nuxt/eslint", "prettier", "eslint-config-prettier"],
+          "modules": ["@nuxt/eslint"],
+          "files": ["eslint.config.mjs", ".prettierrc.json"],
+          "css": []
+        },
+        {
+          "value": "test",
+          "label": "Vitest 测试栈",
+          "desc": "单元测试开箱即跑：纯函数、组合式函数、Pinia store",
+          "note": "vitest + @nuxt/test-utils + happy-dom + vitest.config.ts + test/app.spec.ts（想测组件与接口，在文件顶部加 // @vitest-environment nuxt，写法见 README）",
+          "deps": [],
+          "devDeps": ["vitest", "@nuxt/test-utils", "happy-dom", "@vue/test-utils"],
+          "modules": [],
+          "files": ["vitest.config.ts", "test/app.spec.ts"],
+          "css": []
+        },
+        {
+          "value": "ts-strict",
+          "label": "TypeScript 严格模式",
+          "desc": "strict + noUncheckedIndexedAccess + noImplicitOverride",
+          "note": "写进 nuxt.config.ts 的 TEMPLATE:TYPESCRIPT 区间；vue-tsc + typescript（nuxt typecheck 自己不带这两个包）",
+          "deps": [],
+          "devDeps": ["vue-tsc", "typescript"],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "docker",
+          "label": "Docker 容器化",
+          "desc": "多阶段构建、非 root 运行、healthcheck",
+          "note": "Dockerfile + .dockerignore + compose.yaml + deploy/nginx.conf",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": ["Dockerfile", ".dockerignore", "compose.yaml", "deploy/nginx.conf"],
+          "css": []
+        }
+      ]
+    },
+    {
+      "key": "manager",
+      "label": "包管理器",
+      "column": "right",
+      "multiple": false,
+      "renderAs": "select",
+      "default": "pnpm",
+      "desc": "只支持 pnpm / npm。yarn 与 bun 各有各自的 workspace 与锁定语义，做成选项意味着引擎要维护四套 install 分支。",
+      "options": [
+        {
+          "value": "pnpm",
+          "label": "pnpm",
+          "desc": "磁盘占用小、安装快、lockfile 严格",
+          "note": "写入 pnpm-lock.yaml",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "npm",
+          "label": "npm",
+          "desc": "零额外依赖，CI 里最省事",
+          "note": "写入 package-lock.json；引擎的 install 阶段切换命令",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "nuxt-ui-x-unocss",
+      "level": "block",
+      "when": { "ui": "nuxt-ui", "atomic": "unocss" },
+      "message": "Nuxt UI 基于 Tailwind CSS，与 UnoCSS 同时使用会出现两套工具类解析器互相覆盖，构建产物里的类名归属不可预测。出路：把原子化框架改为「Tailwind CSS」（Nuxt UI 本就自带它）或改为「不使用」；如果你只是想要 Attributify 这类 UnoCSS 特性，请放弃 Nuxt UI、改用 Element Plus / Ant Design Vue。不改的后果是样式时对时错，且报错位置随机。"
+    },
+    {
+      "id": "vuetify-x-tailwind",
+      "level": "warn",
+      "when": { "ui": "vuetify", "atomic": "tailwind" },
+      "message": "Vuetify 自带大量基础样式与 Tailwind 的 preflight 会互相影响（按钮、列表、表单控件的默认外观可能被对方重置）。出路：把 tailwind.css 的 @import 保持在最前，并在业务样式里显式覆盖需要调整的部分；或者改用 Nuxt UI（它和 Tailwind 是同一套体系）。不改的后果是部分组件外观与官方示例不一致，排查成本较高。"
+    },
+    {
+      "id": "nuxt-ui-x-tailwind",
+      "level": "info",
+      "when": { "ui": "nuxt-ui", "atomic": "tailwind" },
+      "message": "Tailwind 已经随 Nuxt UI 一起安装了，这里显式选上只是确认，不会重复安装。css 入口里 tailwind.css 依然排在最前，顺序正确。"
+    },
+    {
+      "id": "nuxt-ui-x-sass",
+      "level": "warn",
+      "when": { "ui": "nuxt-ui", "preprocessor": "sass" },
+      "message": "Tailwind 4 自身不依赖 Sass，两者可以共存，但对 @import 顺序敏感：tailwind.css 必须最先加载，tokens.scss 与 base.css 之后，ui-nuxt.css 最后。出错时的表现是语义色（text-primary、bg-elevated）全部失效且没有任何报错。出路：保持引擎生成的顺序不要手改，或把预处理器改为「不使用」。"
+    },
+    {
+      "id": "vuetify-x-stylus",
+      "level": "warn",
+      "when": { "ui": "vuetify", "preprocessor": "stylus" },
+      "message": "Vuetify 的样式体系与主题变量基于 Sass，Stylus 只能用于你自己的业务样式，无法参与 Vuetify 的主题定制（改不了 $primary 这类变量）。出路：把预处理器改为 Sass；如果只需要 Stylus 写业务样式，请把主题定制需求去掉。"
+    },
+    {
+      "id": "pure-css",
+      "level": "info",
+      "when": { "ui": "none", "atomic": "none", "preprocessor": "none" },
+      "message": "纯 CSS 方案：组件内样式写在 <style scoped> 里，跨组件复用靠 tokens.css 的 CSS 变量。适合内容型站点与少量交互的展示页，产物体积最小。"
+    },
+    {
+      "id": "spa-x-seo",
+      "level": "warn",
+      "when": { "render": "spa", "modules": ["seo"] },
+      "message": "SPA 模式下首屏 HTML 里没有内容，SEO 套件能做的（sitemap、结构化数据）仍然有效，但「让爬虫读到正文」这一条做不到。出路：把渲染模式改为 SSR 或混合（首页预渲染），或者把 SEO 模块去掉、接受它只在分享卡片层面起作用。"
+    },
+    {
+      "id": "ssg-x-i18n",
+      "level": "info",
+      "when": { "render": "ssg", "modules": ["i18n"] },
+      "message": "SSG 下每种语言都要生成一套静态页面，构建时间与产物文件数按语言数成倍增长。语言数超过三种时建议改用混合渲染，或只对默认语言做预渲染。"
+    },
+    {
+      "id": "ssg-x-image",
+      "level": "warn",
+      "when": { "render": "ssg", "modules": ["image"] },
+      "message": "@nuxt/image 的默认 ipx provider 需要服务端来实时处理图片，纯静态部署下拿不到这个服务端。出路：把 provider 换成 ipxStatic 并预生成全部尺寸，或改用 SSG 之外的模式。不改的后果是线上图片 404 或原图直出（体积不受控）。"
+    },
+    {
+      "id": "spa-x-image",
+      "level": "warn",
+      "when": { "render": "spa", "modules": ["image"] },
+      "message": "SPA 产物是静态文件，没有服务端承载 ipx 的实时图片处理。出路：换 ipxStatic provider 并预生成尺寸，或去掉 Image 模块直接用原生 <img> + 自行压缩。不改的后果是图片请求落到不存在的处理端点上。"
+    },
+    {
+      "id": "vuetify-experimental",
+      "level": "block",
+      "when": { "ui": "vuetify" },
+      "experimental": true,
+      "message": "vuetify-nuxt-module 的 npm latest 仍停在 0.19.x，1.0.0-rc 线在 minor 之间可能带破坏性变更，与「产物可复现」冲突。出路：改用 Element Plus / Ant Design Vue / Nuxt UI；确实需要 Vuetify 时用 CLI 显式承担风险：node scripts/init.mjs --selection ./sel.json --force-experimental。"
+    },
+    {
+      "id": "antd-x-less",
+      "level": "info",
+      "when": { "ui": "ant-design-vue", "preprocessor": "less" },
+      "message": "Ant Design Vue 4 的组件样式由 CSS-in-JS 在运行时产出，不走 Less 编译，所以业务侧用 Less 与它不冲突。如果还想改 antd 的设计变量，请用 ConfigProvider 的 theme 配置，而不是 Less 变量覆盖。"
+    }
+  ]
+}

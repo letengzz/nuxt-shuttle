@@ -1,2 +1,20 @@
+# ---------------------------------------------------------------------------
+# pnpm 11 起不再读取 package.json 的 "pnpm" 字段，
+# overrides / allowBuilds / onlyBuiltDependencies 这类配置必须写在这里。
+#
+# allowBuilds 控制「哪些依赖允许执行安装脚本」：
+# strictDepBuilds 默认为真，没在这里显式允许的包不会跑 postinstall，
+# 症状是「装完了但二进制缺失」。修法是把它加成 true，
+# **不要**用 --ignore-scripts 绕过去（那会连带跳过真正需要的脚本）。
+#
+# 引导期只装了 nuxt，它唯一的构建脚本来自 esbuild。现代 esbuild 的平台二进制
+# 由 optionalDependencies 提供，postinstall 只做校验，因此显式关掉安装更快，
+# 也不依赖网络去拉二进制。
+#
+# 初始化时 scripts/init.mjs 会按所选方案重写下面这个区间：
+# 需要跑安装脚本的方案（如 @nuxt/image 的 sharp）会被追加为 true。
+# ---------------------------------------------------------------------------
+# >>> TEMPLATE:ALLOW_BUILDS
 allowBuilds:
   esbuild: false
+# <<< TEMPLATE:ALLOW_BUILDS

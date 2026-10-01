@@ -1,0 +1,47 @@
+# 单机起一个可用实例的最小配置。
+#
+# 为什么 compose 里不写 `deploy.resources`：那些在 Swarm 之外不生效，
+# 写在单机文件里只会让人以为「已经限制过内存了」。真要限，用 `mem_limit`。
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nuxt-shuttle:local
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      # 只监听容器内网卡 —— 宿主机通过上面的 ports 映射进来，不需要容器对外广播
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: '3000'
+    # 健康检查与 Dockerfile 里的保持一致：编排系统靠它判断要不要重启
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+
+  # 需要 HTTPS 与静态资源缓存时启用它，并在 DNS/证书侧指向这里的 80/443。
+  # 直接暴露 3000 到公网不是不能跑，但少了压缩、缓存与限流三件事。
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '8080:80'
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    profiles:
+      # 默认不启动：`docker compose --profile proxy up` 才会带上它
+      - proxy

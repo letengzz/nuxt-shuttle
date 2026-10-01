@@ -1,0 +1,143 @@
+/* ===========================================================================
+ * 基础层：reset + 排版 + 表单基础样式。
+ *
+ * 它和 tokens.css 一样属于「不随选择变化」的样式资产：即使初始化后选了
+ * Tailwind 或 Element Plus，这两个文件依然保留在最前面（见 README 的样式顺序）。
+ *
+ * 纪律：不允许出现 !important —— 它会让后续接入组件库时的样式覆盖变成猜谜。
+ * =========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  margin: 0 0 var(--sp-3);
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: var(--text-lg);
+}
+
+p {
+  margin: 0 0 var(--sp-3);
+}
+
+a {
+  color: var(--brand-700);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+code {
+  padding: 1px var(--sp-1);
+  border-radius: 4px;
+  background: var(--bg-subtle);
+}
+
+pre {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+
+pre code {
+  padding: 0;
+  background: none;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+ * 表单基础样式：选择页的所有控件都靠这几条撑起来，不需要引任何组件库。
+ * ------------------------------------------------------------------------- */
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  padding: var(--sp-2) var(--sp-4);
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--brand-600);
+}
+
+button[data-primary] {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select,
+input[type='text'] {
+  font: inherit;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand-600);
+  outline-offset: 2px;
+}
+
+/* 全项目唯一一处被允许的 !important：可访问性要求「减少动态效果」必须
+ * 能压过任何来源的 transition，而这条规则在样式表最前面，不靠 !important
+ * 压不住后面的声明。除此之外任何地方都不许用。 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

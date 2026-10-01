@@ -1,0 +1,19 @@
+{
+  "app": {
+    "title": "Nuxt Shuttle",
+    "description": "A Nuxt starter template"
+  },
+  "nav": {
+    "home": "Home",
+    "about": "About"
+  },
+  "action": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "retry": "Retry"
+  },
+  "error": {
+    "notFound": "Page not found",
+    "network": "Network error, please try again"
+  }
+}

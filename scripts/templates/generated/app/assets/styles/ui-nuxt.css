@@ -1,0 +1,21 @@
+/* Nuxt UI 的语义色桥接。
+ *
+ * Nuxt UI 自带一套语义色（--ui-primary、--ui-bg-elevated 这类）。这里把它们
+ * 指向本项目的设计令牌，于是「改 tokens.css 一处，全站跟着变」这条性质在用了
+ * 组件库之后依然成立 —— 否则组件库的配色会成为第二套事实来源。
+ *
+ * 这个文件排在 css 数组的最后：它要覆盖组件库自己的默认值。
+ */
+@theme {
+  --color-brand-50: var(--brand-50);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+}
+
+:root {
+  /* Nuxt UI 的 primary 指向品牌色。深色模式下的取值在 tokens.css 的暗色块里已经改过，
+     这里只做一次指向，不重复维护。 */
+  --ui-primary: var(--brand-600);
+  --ui-radius: var(--radius);
+}

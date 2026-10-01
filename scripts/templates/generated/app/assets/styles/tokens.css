@@ -1,0 +1,68 @@
+/* ===========================================================================
+ * 令牌层：唯一的颜色 / 尺寸来源。这是**不使用预处理器的变体**。
+ *
+ * 这一层有四个变体（tokens.css / tokens.scss / tokens.less / tokens.styl），
+ * 由 scripts/init.mjs 按「CSS 预处理器」的选择生成**恰好一个**，其余三个会被删掉 ——
+ * 同时存在两个变体就等于有两个事实来源，迟早对不上。
+ *
+ * 换方案时**语义名不变**（--bg、--fg、--brand-500）：业务组件永远只引用语义名，
+ * 所以换预处理器不需要改任何业务代码。这就是令牌层必须存在的原因。
+ *
+ * 纪律：本文件不含任何选择器与布局，只有 :root 上的变量声明。
+ * =========================================================================== */
+
+:root {
+  /* 品牌色阶（与 Nuxt 品牌绿对齐，便于视觉对照） */
+  --brand-50: #effdf5;
+  --brand-500: #00dc82;
+  --brand-600: #00c16a;
+  --brand-700: #007f45;
+
+  /* 语义色 */
+  --bg: #ffffff;
+  --bg-subtle: #f8fafc;
+  --fg: #0f172a;
+  --fg-muted: #64748b;
+  --border: #e2e8f0;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --warn: #d97706;
+  --warn-bg: #fffbeb;
+  --info: #475569;
+  --info-bg: #f1f5f9;
+
+  /* 间距与圆角：8px 基准，避免散落魔法数字 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  /* 排版 */
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+
+  /* 动效 */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 暗色适配只在这一处覆盖语义名。因为全站只引用语义名，
+ * 所以暗色模式只需要维护这一个地方。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1120;
+    --bg-subtle: #111827;
+    --fg: #e2e8f0;
+    --fg-muted: #94a3b8;
+    --border: #1f2937;
+    --danger-bg: #2a1315;
+    --warn-bg: #2a2110;
+    --info-bg: #16202e;
+  }
+}

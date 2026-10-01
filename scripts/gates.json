@@ -1,0 +1,93 @@
+{
+  "$comment": [
+    "门禁清单的唯一来源：本地、CI、文档检查三处都读这一份。",
+    "",
+    "字段说明：",
+    "  id          门禁标识，用于 --only / --skip",
+    "  cmd         要跑的命令（空格分隔，不允许 shell 元字符；解析后作为 argv 传给子进程）",
+    "  doc         文档一致性判据：true 表示「文档里要有 cmd 原文」，",
+    "              字符串表示「文档里要有这个片段」（命令写法与文档不同但等价时用），",
+    "              false 表示这条门禁不面向文档读者（如本地便利命令）",
+    "  why         这条门禁拦什么。缺了它，后来的人只会看到一串命令",
+    "  owner       出问题找谁（frontend / template）",
+    "  timeoutSec  超时上限，超时记为 TIMEOUT 而不是 FAIL",
+    "  weight      权重，用于排序与「哪条更该先修」的判断",
+    "  requires    前置条件。不满足时记 BLOCKED（= 没跑成），而不是 FAIL（= 跑错了）——",
+    "              把「依赖没装」当成「代码写错」，会让人去改本来正确的代码。",
+    "              可用值：node_modules / template.config.json / script:<名字>",
+    "  docsDir     文档目录（相对本仓库；也可用环境变量 NUXT_SHUTTLE_DOCS_DIR 覆盖为绝对路径），供 --check 使用；不存在时 --check 记 BLOCKED"
+  ],
+  "docsDir": "../../docs-website/project/Base/NuxtTemplate",
+  "gates": [
+    {
+      "id": "matrix",
+      "cmd": "node scripts/matrix.mjs --dry-run-all",
+      "doc": true,
+      "why": "全矩阵：240 个组合逐个算计划并核对模板齐全（漏一个模板就是用户点了那个选项才炸）",
+      "owner": "template",
+      "timeoutSec": 120,
+      "weight": 3,
+      "requires": []
+    },
+    {
+      "id": "engine-selftest",
+      "cmd": "node scripts/selftest.mjs",
+      "doc": true,
+      "why": "引擎自测：A~H 八组，含变异测试（改坏一格必须报红，否则断言是装饰）",
+      "owner": "template",
+      "timeoutSec": 900,
+      "weight": 3,
+      "requires": []
+    },
+    {
+      "id": "verify",
+      "cmd": "node scripts/verify.mjs",
+      "doc": true,
+      "why": "产物复核：引导器删干净、依赖与快照一致、marker 区间成对",
+      "owner": "template",
+      "timeoutSec": 300,
+      "weight": 3,
+      "requires": ["template.config.json"]
+    },
+    {
+      "id": "drift",
+      "cmd": "node scripts/init.mjs --check",
+      "doc": true,
+      "why": "漂移检测：仓库现状与 template.config.json 一致（当作 CI 门禁，防止有人手工改产物）",
+      "owner": "template",
+      "timeoutSec": 60,
+      "weight": 3,
+      "requires": ["template.config.json"]
+    },
+    {
+      "id": "lint",
+      "cmd": "pnpm lint",
+      "doc": true,
+      "why": "静态检查：写法与约定（含 no-restricted-imports 把「引擎零依赖」这条约定变成门禁）",
+      "owner": "frontend",
+      "timeoutSec": 180,
+      "weight": 1,
+      "requires": ["node_modules", "script:lint"]
+    },
+    {
+      "id": "typecheck",
+      "cmd": "pnpm run typecheck",
+      "doc": "typecheck",
+      "why": "类型检查：接口与数据形状（需要 nuxt prepare 先生成 .nuxt 类型）",
+      "owner": "frontend",
+      "timeoutSec": 300,
+      "weight": 2,
+      "requires": ["node_modules", "script:typecheck"]
+    },
+    {
+      "id": "test",
+      "cmd": "pnpm test",
+      "doc": true,
+      "why": "单元测试：纯函数、组合式函数、Pinia store",
+      "owner": "frontend",
+      "timeoutSec": 300,
+      "weight": 2,
+      "requires": ["node_modules", "script:test"]
+    }
+  ]
+}

@@ -1,0 +1,450 @@
+/* ===========================================================================
+ * 布局层：选择页的三区栅格与所有引导期专用控件样式。
+ *
+ * 这个文件整体属于「引导期资产」—— 初始化时随选择页一起删除。
+ * 因为它在 app/pages/setup/index.vue 里被 import（而不是写进 nuxt.config.ts
+ * 的全局 css 数组），删页面时样式引用会一起消失，不需要额外改配置。
+ *
+ * 纪律：
+ *   ① 不用 !important
+ *   ② 不在组件里写行内 style 表达布局（行内样式无法被样式方案接管）
+ *   ③ 不进全局 css 数组
+ * =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+ * 三区栅格：左侧 = 技术栈身份，右侧 = 运行形态与工程配置，底部 = 操作条
+ * ------------------------------------------------------------------------- */
+.wizard {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--sp-6);
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--sp-8) var(--sp-4);
+  align-items: start;
+}
+
+.wizard__head {
+  grid-column: 1 / -1;
+}
+
+/* 跨满整行的块：骨架态与接管页面的进度面板 */
+.wizard__full {
+  grid-column: 1 / -1;
+}
+
+.wizard__head h1 {
+  margin-bottom: var(--sp-2);
+}
+
+.wizard__head p {
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.wizard__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+
+.wizard__footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.wizard__footer-status {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* 运行中：整个表单置灰不可编辑，交互交给进度面板 */
+.wizard.is-running .wizard__col {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .wizard {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 分组与卡片单选
+ * ------------------------------------------------------------------------- */
+.group + .group {
+  margin-top: var(--sp-6);
+}
+
+.group > legend {
+  font-size: var(--text-lg);
+  margin-bottom: var(--sp-1);
+}
+
+.group__desc {
+  margin: 0 0 var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.card-stack {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.card:hover {
+  border-color: var(--brand-600);
+}
+
+.card.is-active {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+}
+
+.card.is-blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.card.is-blocked:hover {
+  border-color: var(--border);
+}
+
+.card input {
+  grid-row: 1 / span 3;
+  margin-top: var(--sp-1);
+  accent-color: var(--brand-600);
+}
+
+.card .desc,
+.card .note {
+  grid-column: 2;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.card .note {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+/* 单选按钮组（左侧技术栈）。
+ *
+ * 与 .card 的取舍：卡片是「一屏看完全部信息」的读法，适合右栏那几组说明较长的；
+ * 左栏三组每项只有一句话，用卡片会把纵向空间吃光，反而看不清有哪几个候选。
+ * 所以这里压成标签一行 + 说明一行，扫视时先比名称。
+ * 选中态靠 :has() 驱动，见下方 —— 不用 :checked ~ 是为了让 DOM 顺序保持自然，
+ * 顺带让「说明文字」也能参与高亮。
+ */
+.radio-stack {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.radio {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.radio:hover {
+  border-color: var(--brand-600);
+  border-left-color: var(--border);
+}
+
+.radio input {
+  grid-row: 1 / span 3;
+  margin-top: 2px;
+  accent-color: var(--brand-600);
+}
+
+.radio__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.radio__flag {
+  padding: 0 6px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.radio__desc,
+.radio__note {
+  grid-column: 2;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.radio__note {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+/* 选中：整条加底色 + 左侧色条。左侧色条是这个形态唯一的「强信号」，
+   因为单选按钮本身很小，靠它很难一眼看出选了哪个。 */
+.radio:has(input:checked) {
+  border-color: var(--brand-600);
+  border-left-color: var(--brand-600);
+  background: var(--brand-50);
+}
+
+.radio.is-blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.radio.is-blocked:hover {
+  border-color: var(--border);
+  border-left-color: var(--border);
+}
+
+/* 复选行（模块、工程开关） */
+.row-stack {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-subtle);
+}
+
+.row input {
+  grid-row: 1 / span 3;
+  margin-top: var(--sp-1);
+  accent-color: var(--brand-600);
+}
+
+.row .desc {
+  grid-column: 2;
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.row.is-blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 下拉单选 */
+.select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+/* ---------------------------------------------------------------------------
+ * 三层规则提示：block 红 / warn 黄 / info 灰
+ * ------------------------------------------------------------------------- */
+.hint-list {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.hint {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+
+.hint--block {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.hint--warn {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.hint--info {
+  border-color: var(--info);
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+/* ---------------------------------------------------------------------------
+ * 依赖预览（底部折叠区）
+ * ------------------------------------------------------------------------- */
+.preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+}
+
+.preview > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.preview__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.preview__grid h3 {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  margin-bottom: var(--sp-1);
+}
+
+.preview__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.preview__empty {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---------------------------------------------------------------------------
+ * 进度面板
+ * ------------------------------------------------------------------------- */
+.progress {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--sp-8) var(--sp-4);
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.steps li.is-active {
+  border-color: var(--brand-600);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.steps li.is-done {
+  border-color: var(--brand-500);
+  background: var(--brand-50);
+  color: var(--fg);
+}
+
+.log {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.log__line {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log__line--error {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------------------
+ * 骨架态与摘要
+ * ------------------------------------------------------------------------- */
+.skeleton {
+  padding: var(--sp-6);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.summary {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+
+.stack-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.stack-kv dt {
+  color: var(--fg-muted);
+}
+
+.stack-kv dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}
