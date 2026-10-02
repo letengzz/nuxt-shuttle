@@ -46,6 +46,7 @@ import {
   assertRenderableTemplate,
   blankSections,
   countMarker,
+  detectEol,
   markerBegin,
   markerEnd,
   readSection,
@@ -1070,6 +1071,50 @@ function simulateInstalled(dir) {
       }
     }
     eq(countMarker(markerBegin('package.json', 'X'), 'X'), 1, 'JSON marker 里的键名');
+  });
+
+  g.check('E12 行尾透明：CRLF 检出上不产生混合行尾，读回的正文与 LF 基线可比', async () => {
+    // 这条是补一个真实故障：仓库在 Windows 上检出（`core.autocrlf=true`）时
+    // pnpm-workspace.yaml 是 CRLF，而 B9 拿它与 LF 渲染基线逐字比 ——
+    // 于是 B9 在任何 Windows 检出上都是红的，两边打印出来还一模一样，差别全在不可见的 \r。
+    //
+    // 所以样本两种行尾都**自己造**，不依赖本机是怎么检出的：一旦依赖工作区文件，
+    // 这条门禁就会在 LF 机器上天然变绿，等于没测。
+    const b = markerBegin('pnpm-workspace.yaml', 'ALLOW_BUILDS');
+    const e = markerEnd('pnpm-workspace.yaml', 'ALLOW_BUILDS');
+    const lines = ['# 说明', b, e, 'tail: true', ''];
+    const lfSample = lines.join('\n');
+    const crlfSample = lines.join('\r\n');
+    const body = 'allowBuilds:\n  esbuild: false';
+
+    eq(detectEol(lfSample), '\n', 'detectEol 认 LF');
+    eq(detectEol(crlfSample), '\r\n', 'detectEol 认 CRLF');
+
+    // ① CRLF 文件改写后必须整份仍是 CRLF。判据：`\r\n` 的个数 == `\n` 的个数
+    //    （每个 `\n` 都紧跟在 `\r` 后面）。有孤立 LF 时后者会多出来。
+    const outCrlf = rewriteSection(crlfSample, b, e, body);
+    eq(outCrlf.split('\n').length - 1, outCrlf.split('\r\n').length - 1,
+      'CRLF 输入改写后不应出现孤立 LF（混合行尾会让 git diff 显示整段被改过）');
+    includes(outCrlf, `allowBuilds:\r\n  esbuild: false`, '区间正文按文件自身的行尾写出');
+
+    // ② 反向：LF 文件不许被写成 CRLF
+    const outLf = rewriteSection(lfSample, b, e, body);
+    eq(outLf.includes('\r'), false, 'LF 输入不应被写成 CRLF');
+
+    // ③ 两种行尾读回来都必须是 LF —— 调用方要拿它与 renderSections 的基线逐字比
+    eq(readSection(outCrlf, b, e), body, 'CRLF 文件里读回的正文（应归一化成 LF）');
+    eq(readSection(outLf, b, e), body, 'LF 文件里读回的正文');
+
+    // ④ 幂等：CRLF 文件连改两次逐字节相同
+    eq(rewriteSection(outCrlf, b, e, body), outCrlf, 'CRLF 上连改两次应逐字节相同');
+
+    // ⑤ B9 报红的那条判据本身：模板仓库的文件不论以哪种行尾检出，读回都等于渲染基线
+    const plain = ctxOf({});
+    eq(
+      readSection(readFileSync(join(TEMPLATE_ROOT, 'pnpm-workspace.yaml'), 'utf8'), b, e),
+      plain.sections['pnpm-workspace.yaml'].ALLOW_BUILDS,
+      '模板文件的区间读回来必须与渲染基线一致（与检出时的行尾无关）',
+    );
   });
 }
 

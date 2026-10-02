@@ -217,6 +217,24 @@ export function countMarker(text, marker) {
 }
 
 /**
+ * 这份文本用的是哪种行尾。
+ *
+ * 为什么必须显式问一次：`git` 在 Windows 上默认 `core.autocrlf=true`，检出时会把仓库里
+ * 的 LF 全部换成 CRLF。若改写只用 `\n` 拼接，就会往一份 CRLF 文件里塞进一段 LF 行尾的
+ * 区间 —— 文件变成**混合行尾**：编辑器看着正常、pnpm 也照读，但 `git diff` 会显示整段
+ * 被改过，而且换台机器（autocrlf=false）就完全复现不出来。
+ *
+ * 本仓库真的踩过这条：门禁 B9 拿工作区里的 `pnpm-workspace.yaml` 与 LF 渲染基线逐字比，
+ * 于是在任何 Windows 检出上都是红的，而两边打印出来一模一样 —— 差别全在不可见的 `\r`。
+ *
+ * 判据取「**出现过 `\r\n` 就整份按 CRLF 处理**」：宁可把区间统一成 CRLF，也不要混合。
+ * 混合行尾是最糟的一种，因为它同时骗过编辑器和肉眼。
+ */
+export function detectEol(text) {
+  return String(text ?? '').includes('\r\n') ? '\r\n' : '\n';
+}
+
+/**
  * 从**含缩进的行首**替换区间正文。
  *
  * 这是全项目最容易写错的一处，两层都要对：
@@ -247,18 +265,28 @@ export function rewriteSection(text, begin, end, body) {
   const endLineEnd = text.indexOf('\n', e + end.length);
   const head = text.slice(0, lineStart);
   const tail = endLineEnd === -1 ? '' : text.slice(endLineEnd + 1);
+  // 区间的行尾跟随文件本身。head / tail 是原样切片、自带行尾，这里若写死 `\n`，
+  // 整份文件就成「外面 CRLF、区间里 LF」的混合体 —— 见 `detectEol` 的注释。
+  const eol = detectEol(text);
 
   const indented = body
-    ? body.split('\n').map((line) => (line ? markerIndent + line : line)).join('\n')
+    ? body.split('\n').map((line) => (line ? markerIndent + line : line)).join(eol)
     : '';
   const block = body
-    ? `${markerIndent}${begin}\n${indented}\n${markerIndent}${end}`
-    : `${markerIndent}${begin}\n${markerIndent}${end}`;
+    ? `${markerIndent}${begin}${eol}${indented}${eol}${markerIndent}${end}`
+    : `${markerIndent}${begin}${eol}${markerIndent}${end}`;
 
-  return `${head}${block}\n${tail}`;
+  return `${head}${block}${eol}${tail}`;
 }
 
-/** 读出区间正文，去掉统一缩进 —— 供 --check 逐字节比对。 */
+/**
+ * 读出区间正文，去掉统一缩进 —— 供 `--check` 与 `verify` 比对。
+ *
+ * **行尾一律归一成 LF** 再返回：调用方拿到它就要与 `renderSections` 生成的基线
+ * （永远是 LF）逐字比，而磁盘上的文件可能是 CRLF（Windows 检出、或用户编辑器
+ * 统一过行尾）。不归一的话，比对结果就取决于「这台机器是怎么检出的」——
+ * 同一份内容在 LF 机器上绿、在 CRLF 机器上红，而且两边打印出来一模一样。
+ */
 export function readSection(text, begin, end) {
   const b = text.indexOf(begin);
   const e = text.indexOf(end);
@@ -269,11 +297,13 @@ export function readSection(text, begin, end) {
   const bodyEnd = text.lastIndexOf('\n', e);
   if (bodyEnd <= bodyStart) return '';
 
-  const raw = text.slice(bodyStart + 1, bodyEnd);
   const indent = text.slice(text.lastIndexOf('\n', b) + 1, b);
-  if (!indent) return raw;
-  return raw
+  const lines = text
+    .slice(bodyStart + 1, bodyEnd)
     .split('\n')
+    .map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+  if (!indent) return lines.join('\n');
+  return lines
     .map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
     .join('\n');
 }
