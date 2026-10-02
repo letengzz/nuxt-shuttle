@@ -509,7 +509,13 @@ export function useWizard() {
       if (payload.initialized) {
         state.status = 'done';
         state.mode = 'idle';
-      } else if (state.status === 'running' || state.status === 'failed') {
+      } else if (state.mode !== 'stream' && (state.status === 'running' || state.status === 'failed')) {
+        // 「本页没有连着进度流」才允许把 running / failed 打回 selecting。
+        //
+        // 为什么必须有这个前提：锁文件与 SSE 是两条独立的时序。进度页挂载时会调一次本函数，
+        // 而那一刻引擎往往刚被拉起、锁还没写出来 —— 拿这个瞬时结论覆盖流里的状态，
+        // 一次正在进行的初始化就会显示成「什么都没在跑」，然后被弹回选择页。
+        // 引擎清掉锁的瞬间同理：`exit` 事件才是终局判据，不能由一次轮询抢先下结论。
         state.mode = 'idle';
         state.status = 'selecting';
       }

@@ -9,6 +9,10 @@
  *
  * 一条原则：**错误原文不美化**。失败时把引擎的原始输出整段放在可折叠区里 ——
  * 排障时那行字比任何友好文案都有用。
+ *
+ * 职责边界：**只渲染会滚动的进度内容**。执行期那几个按钮（中断 / 查看最新状态 /
+ * 返回并重试）在 ProgressActions 里，由页面放进底部吸附区 —— 它们必须一直可见，
+ * 混进这一层就会被长日志顶出屏幕。
  */
 import type { InitPlan } from '~/utils/wizard/option-model';
 
@@ -18,7 +22,6 @@ const props = defineProps<{
   status: string;
   mode: string;
   logs: { level: 'info' | 'error'; line: string }[];
-  exitCode: number | null;
   error: string;
   enginePlan: InitPlan | null;
   remote: {
@@ -30,8 +33,6 @@ const props = defineProps<{
     wizard: { total: number; present: number };
   } | null;
 }>();
-
-const emit = defineEmits<{ detach: []; retry: []; refresh: [] }>();
 
 const logBox = ref<HTMLElement | null>(null);
 
@@ -126,29 +127,5 @@ function stepClass(index: number): Record<string, boolean> {
         </p>
       </div>
     </details>
-
-    <div class="wizard__footer">
-      <span class="wizard__footer-status">
-        <template v-if="status === 'running'">执行中，请不要关闭标签页。</template>
-        <template v-else-if="status === 'failed'">
-          退出码 {{ exitCode ?? '—' }}。失败时引擎会<strong>保留</strong>锁文件，避免你在半删状态下重跑。
-        </template>
-      </span>
-
-      <button v-if="status === 'running'" type="button" @click="emit('detach')">
-        中断进度流
-      </button>
-      <button v-if="status === 'failed'" type="button" @click="emit('refresh')">
-        查看最新状态
-      </button>
-      <button v-if="status === 'failed'" type="button" @click="emit('retry')">
-        返回并重试
-      </button>
-    </div>
-
-    <p v-if="status === 'failed'" class="preview__empty">
-      如果确认需要撤销这次未完成的初始化，在仓库根目录执行 <code>node scripts/init.mjs --rollback</code>；
-      锁文件里保留了开始时的选择快照与失败原因。
-    </p>
   </section>
 </template>

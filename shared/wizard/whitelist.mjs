@@ -23,6 +23,7 @@ export const WIZARD_FILES = [
   'app/components/wizard/ConflictHint.vue',
   'app/components/wizard/DependencyPreview.vue',
   'app/components/wizard/ProgressStream.vue',
+  'app/components/wizard/ProgressActions.vue',
   'app/utils/wizard/option-model.ts',
   'app/utils/wizard/useWizard.ts',
   'app/assets/styles/wizard.css',

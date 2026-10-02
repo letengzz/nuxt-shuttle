@@ -306,8 +306,10 @@ function simulateInstalled(dir) {
     const progress = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/progress.vue'), 'utf8');
     assert(/onMounted\([\s\S]{0,200}?wizard\.attach\(/.test(progress), '进度页的挂载钩子应调用 attach()');
 
-    // 变异：把调用删掉，上面那条必须变红 —— 否则它只是装饰
-    const mutated = page.replace(/void wizard\.(load|attach)\(\);/g, '/* 删掉 */');
+    // 变异：把调用删掉，上面那条必须变红 —— 否则它只是装饰。
+    // 正则要同时容下 `void` 与 `await`：选择页的挂载钩子改成 async 之后用的是 await，
+    // 只认 void 的话变异会**静默失效**（这一步自己就是这么被抓出来的）。
+    const mutated = page.replace(/(?:void |await )?wizard\.(load|attach)\(\);/g, '/* 删掉 */');
     assert(mutated !== page, '变异没生效：源码里找不到可删的调用');
     assert(!/onMounted\([\s\S]{0,200}?wizard\.(load|attach)\(/.test(mutated), '变异后不该再有调用');
   });
@@ -546,6 +548,112 @@ function simulateInstalled(dir) {
       ),
       '安装失败的分支必须调用 ignoredBuildHint 并把提示发给用户',
     );
+  });
+
+  g.check('A13 初始化进度是独立整页，不再内嵌在选择页下方', async () => {
+    // 为什么值得卡：把进度面板挪回选择页下方，页面照样渲染、一条报错都没有 ——
+    // 只是「跑起来之后该看什么」又变回两处（选择页内嵌 + /setup/progress），
+    // 而两处共用 useWizard 的同一份模块级状态，刷新后看到的东西不一样。
+    // 这类回归静态看不出来，只能把结构钉死。
+    const setup = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/index.vue'), 'utf8');
+    const progress = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/progress.vue'), 'utf8');
+    const panel = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/ProgressStream.vue'), 'utf8');
+    const actions = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/ProgressActions.vue'), 'utf8');
+    const composable = readFileSync(join(TEMPLATE_ROOT, 'app/utils/wizard/useWizard.ts'), 'utf8');
+
+    // ① 选择页里不许再出现进度面板。判据锚定 `<ProgressStream` 这个开标签：
+    //    裸词 ProgressStream 会命中注释（注释里正在解释这件事），和 <dialog> 那次是同一个坑。
+    assert(!/<ProgressStream/.test(setup), '选择页不该再渲染进度面板');
+    // import 单独锚定成整行。这里不能用裸词 ProgressStream —— 它会被注释命中
+    // （本页的注释正在解释「进度不在这里」），而 `^import …ProgressStream.vue';$`
+    // 只认真正的 import 行，注释怎么改都骗不过它。
+    assert(!/^import .*ProgressStream\.vue';$/m.test(setup), '选择页不该再 import 进度面板');
+    assert(/<ProgressStream/.test(progress), '进度面板现在只由进度页渲染');
+
+    // ② 点下「确认并开始初始化」要整页过去，而且必须**先起流再跳**：
+    //    顺序反过来的话，进度页挂载时状态还是 planned，会被它自己的兜底判成
+    //    「没有初始化在跑」弹回选择页 —— 用户看到的是点完按钮原地不动。
+    const started = setup.indexOf('void wizard.start();');
+    assert(started > 0, '确认按钮必须调用 start()');
+    assert(
+      setup.indexOf("navigateTo('/setup/progress')", started) > started,
+      '起流之后必须整页跳到进度页',
+    );
+    assert(
+      !/await wizard\.start\(\)/.test(setup),
+      '不能 await start()：那要等完整个初始化（几分钟）才跳转，进度页永远看不到实时进度',
+    );
+
+    // ③ 刷新 /setup 也要能分流过去，否则「跑到一半刷新」会停在一个看似无人操作的选择页。
+    assert(
+      /onMounted\([\s\S]{0,400}?shouldShowProgress\.value[\s\S]{0,160}?navigateTo\('\/setup\/progress'\)/.test(setup),
+      '选择页的挂载钩子必须在发现已有初始化时整页跳到进度页',
+    );
+
+    // ④ 分流判据必须要求**进程存活**。只看「锁存在」的话，失败后残留的锁会让选择页
+    //    每次打开都把人甩去进度页，而进度页的「返回并重试」又把人送回来 ——
+    //    两页来回弹，谁也到不了能操作的地方。判据的不对称是刻意的：
+    //    选择页送过去的情形，进度页一定接得住。
+    assert(
+      /state\.remote\?\.locked\s*&&\s*state\.remote\?\.processAlive/.test(setup),
+      '选择页的分流判据必须要求进程仍存活（残锁要留在进度页看失败原因）',
+    );
+    assert(
+      /if \(!hasRun\.value\) await navigateTo\('\/setup'\)/.test(progress),
+      '进度页在「确实没有初始化在跑」时必须回选择页',
+    );
+    // 判据本身跨两行，所以用 [\s\S] 抓到第一个 `);` 为止
+    const hasRunDecl = /const hasRun = computed\(\(\) =>[\s\S]{0,300}?\);/.exec(progress)?.[0] ?? '';
+    assert(hasRunDecl.includes('locked'), '进度页的判据必须认得锁文件');
+    assert(
+      !hasRunDecl.includes('processAlive'),
+      '进度页的判据不能要求进程存活 —— 残锁（进程已退出）正是最需要看失败原因的时候',
+    );
+    // 但必须认得「本页正开着进度流」：点下确认是**先起流、再整页过来**，
+    // 引擎要过一会儿才写出锁文件。少这一条，进度页会在这段窗口里把自己判成
+    // 「没有初始化在跑」弹回选择页 —— 用户看到的是点完按钮闪一下又回来。
+    // 这个窗口靠读代码看不出来（流与锁都「应该有」），是 CDP 实跑抓出来的。
+    assert(
+      hasRunDecl.includes("state.mode === 'stream'"),
+      '进度页的判据必须认得流态（引擎写出锁文件之前的那段窗口）',
+    );
+
+    // ⑤ 竞态：进度页挂载时会读一次 /api/wizard/status，而那一刻引擎往往刚被拉起、锁还没写出来。
+    //    轮询结论不许覆盖「本页正连着进度流」时的 running —— 否则刚点完按钮，
+    //    页面显示成「什么都没在跑」。
+    assert(
+      /if \(payload\.initialized\)[\s\S]{0,900}?state\.mode !== 'stream'[\s\S]{0,700}?state\.status = 'selecting'/
+        .test(composable),
+      '本页正连着进度流时，refreshStatus 不许把 running 打回 selecting',
+    );
+
+    // ⑥ 操作条必须待在吸附区，不能跟着日志滚。日志区是 320px 定高、失败时动辄几百行，
+    //    混在面板里的「中断进度流」按钮会被顶出屏幕 —— 而那正是它最该被按到的时候。
+    assert(!/class="wizard__footer"/.test(panel), '进度面板里不该再有操作条');
+    assert(/class="wizard__footer"/.test(actions), '操作条应在 ProgressActions 里');
+    assert(/class="wizard__dock"/.test(progress), '进度页必须有底部吸附区（外壳 + 滚动区 + 吸附区三层）');
+
+    // ⑦ 操作条要拿到状态与退出码、三个事件都要接上 —— 少一个按钮就是「点了没反应」，
+    //    而按钮存在与否由 status 决定，接不上时页面不会报任何错。
+    const actionsTag = /<ProgressActions[\s\S]{0,500}?\/>/.exec(progress)?.[0] ?? '';
+    assert(actionsTag !== '', '进度页必须渲染操作条');
+    hasAll(actionsTag, [':status=', ':exit-code=', '@detach=', '@retry=', '@refresh='], '操作条的入参与事件');
+
+    // ⑧ 新组件必须登记进删除白名单：漏了它，初始化之后这个文件会留在产物里。
+    assert(
+      WIZARD_FILES.includes('app/components/wizard/ProgressActions.vue'),
+      '白名单要收录新组件，否则初始化后残留',
+    );
+
+    // ⑨ 令牌注入必须覆盖进度页。它是一整页，会被刷新、被收藏、在另一个标签页里打开，
+    //    而令牌只随 HTML 下发 —— 不在白名单里，整页加载就只剩一串 403，
+    //    「刷新也能看到进度」这条承诺当场失效。
+    //    这个缺口「从选择页点过去」永远碰不到（客户端跳转时令牌已经在 window 上），
+    //    是 CDP 那条「直接敲 URL」的用例抓出来的，必须钉住。
+    const tokenPlugin = readFileSync(join(TEMPLATE_ROOT, 'server/plugins/wizard-token.ts'), 'utf8');
+    const tokenPaths = /WIZARD_PATHS = new Set\(\[([^\]]*)\]\)/.exec(tokenPlugin)?.[1] ?? '';
+    assert(tokenPaths !== '', '找不到令牌注入的路径白名单（变量被改名了？）');
+    includes(tokenPaths, "'/setup/progress'", '令牌注入的路径白名单要含进度页');
   });
 }
 

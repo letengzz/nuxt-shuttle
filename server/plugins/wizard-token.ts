@@ -13,8 +13,17 @@
  */
 import { issueWizardToken } from '../utils/wizard/guard';
 
-/** 需要注入令牌的路径：引导页本身，以及会把它重定向过来的首页。 */
-const WIZARD_PATHS = new Set(['/', '/setup', '/setup/']);
+/**
+ * 需要注入令牌的路径：引导页本身、进度页，以及会把它重定向过来的首页。
+ *
+ * 进度页必须在列 —— 它是一整页，可以被**刷新、收藏、在另一个标签页里打开**，
+ * 而令牌只随 HTML 下发：整页加载拿不到它，那一页就只剩一串 403，
+ * 「刷新也能看到进度」这条承诺当场失效。
+ *
+ * 为什么以前没暴露：从 /setup 点过去是**客户端跳转**，令牌已经在 window 上了，
+ * 于是只测「点按钮那条路」永远碰不到这个缺口。是 CDP 那条「直接敲 URL」的用例抓出来的。
+ */
+const WIZARD_PATHS = new Set(['/', '/setup', '/setup/', '/setup/progress', '/setup/progress/']);
 
 export default defineNitroPlugin((nitroApp) => {
   // 生产构建里这一行会被静态求值为 false，整个插件被压缩掉

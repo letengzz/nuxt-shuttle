@@ -2,7 +2,7 @@
 /**
  * 选择页：两栏 + 底部吸附区（左技术栈 / 右 Nuxt 配置 / 底「冲突提示 + 操作条」）。
  *
- * 五条刻意的设计：
+ * 六条刻意的设计：
  * ① 首次绘制一定是**骨架态**。令牌要从 window.__WIZARD__ 读、选择要从 localStorage 与
  *    URL 读，这些只有浏览器里才有。与其在服务端渲染一份「猜的」默认值再水合时改掉
  *    （那会带来水合不一致），不如先显示骨架，挂载后再拉数据。
@@ -16,6 +16,9 @@
  * ⑤ 底部吸附区（冲突提示 + 操作条）**不随上方内容滚动**。用的不是 position:fixed ——
  *    那样得给页面预留一段只能靠估算的空白（操作条的文字一换行对不上，就会盖住卡片）；
  *    而是「外壳固定一屏高 + 内容层自己滚」，吸附区有多高都不影响它是否真的贴底。
+ * ⑥ **进度不在这里渲染**。这一页只负责「选」，跑起来之后整页交给 /setup/progress；
+ *    两页共用 useWizard 的同一份模块级状态，所以判断「谁该出场」不看本地 status，
+ *    而看磁盘上的锁文件（见 shouldShowProgress）—— 否则两页会互相弹。
  */
 import type { Selection } from '~/utils/wizard/option-model';
 import { useWizard } from '~/utils/wizard/useWizard';
@@ -23,22 +26,37 @@ import ConflictHint from '~/components/wizard/ConflictHint.vue';
 import DependencyPreview from '~/components/wizard/DependencyPreview.vue';
 import NuxtConfigPanel from '~/components/wizard/NuxtConfigPanel.vue';
 import OptionGroup from '~/components/wizard/OptionGroup.vue';
-import ProgressStream from '~/components/wizard/ProgressStream.vue';
 // 引导期样式随页面一起删除：在页面里 import，删页面时引用一起消失，不用去改 nuxt.config.ts
 import '~/assets/styles/wizard.css';
 
 const wizard = useWizard();
-const { state, stages, blockedFor, blockConflicts, warnConflicts, infoConflicts, canStart, canPreview } = wizard;
+const { state, blockedFor, blockConflicts, warnConflicts, infoConflicts, canStart, canPreview } = wizard;
+
+/**
+ * 「该去进度页了」—— 判据取 /api/wizard/status 的原样结果，不取本地 status。
+ *
+ * 为什么不用 `state.status`：候选清单读取失败时它也会变成 'failed'（见 useWizard.load），
+ * 拿它当判据会把一个「连清单都没读到的选择页」送去进度页；而进度页看同一份理由，
+ * 又会判成「没有初始化在跑」把用户弹回来 —— 两页来回弹，谁也到不了终端态。
+ *
+ * 为什么是 `locked && processAlive` 而不是只看 `locked`：**残锁**（进程已退出、锁没清）
+ * 意味着上一次初始化没跑完。那个状态该留在进度页看失败原因，而不是每次打开选择页都被
+ * 甩过去 —— 否则进度页那个「返回并重试」会变成跳过去又被弹回来。两条判据的不对称是
+ * 刻意的：这里会送过去的情形，进度页一定接得住。
+ */
+const shouldShowProgress = computed(() =>
+  Boolean(state.remote?.locked && state.remote?.processAlive) || state.remote?.initialized === true);
 
 /**
  * 挂载后再拉数据：令牌来自 window.__WIZARD__、选择来自 localStorage 与 URL，
  * 这些服务端都没有（见文件头 ①）。在这之前页面就是骨架态。
  *
  * 这里用 attach() 而不是只 load()：它顺带读一次锁文件状态 ——
- * 于是「跑到一半刷新 /setup」也能直接看到进度，而不是回到一个看似无人操作的选择页。
+ * 于是「跑到一半刷新 /setup」会被立刻分流到进度页，而不是停在一个看似无人操作的选择页。
  */
-onMounted(() => {
-  void wizard.attach();
+onMounted(async () => {
+  await wizard.attach();
+  if (shouldShowProgress.value) await navigateTo('/setup/progress');
 });
 
 /** 展示顺序固定：阻断 → 提醒 → 说明。先看到「不能提交的原因」，再看建议。 */
@@ -51,7 +69,6 @@ const orderedConflicts = computed(() => [
 const leftGroups = computed(() => state.schema?.groups.filter((group) => group.column === 'left') ?? []);
 const rightGroups = computed(() => state.schema?.groups.filter((group) => group.column === 'right') ?? []);
 const loading = computed(() => !state.schema);
-const showProgress = computed(() => ['running', 'done', 'failed'].includes(state.status));
 
 const previewOpen = ref(false);
 
@@ -71,11 +88,18 @@ async function openPreview(): Promise<void> {
   if (state.status !== 'planned') await wizard.preview();
 }
 
-/** 两步确认：第一次算计划并弹预览，第二次才动手。 */
+/**
+ * 两步确认：第一次算计划并弹预览，第二次才动手。
+ *
+ * 动手那一步**不在这里等结果**：start() 要跑几分钟，而「跑」是另一页的职责。
+ * 先起流（它同步的那一段会把状态置成 running、装上离开页面的守卫），再整页过去。
+ * 顺序不能反 —— 反过来进度页挂载时状态还是 planned，会被它判成「没有初始化在跑」弹回来。
+ */
 async function onInit(): Promise<void> {
   if (state.status === 'planned') {
     previewOpen.value = false;
-    await wizard.start();
+    void wizard.start();
+    await navigateTo('/setup/progress');
     return;
   }
   await openPreview();
@@ -127,24 +151,10 @@ async function onInit(): Promise<void> {
         </div>
       </template>
 
-      <div v-if="showProgress" class="wizard__full">
-        <ProgressStream
-          :stages="stages"
-          :stage-index="state.stageIndex"
-          :status="state.status"
-          :mode="state.mode"
-          :logs="state.logs"
-          :exit-code="state.exitCode"
-          :error="state.error"
-          :engine-plan="state.enginePlan"
-          :remote="state.remote"
-          @detach="wizard.detach()"
-          @retry="wizard.retry()"
-          @refresh="wizard.refreshStatus()"
-        />
-      </div>
-
-      <div v-if="!showProgress && state.error" class="wizard__full">
+      <!-- 进度**不在这里**渲染：点下确认之后整页交给 /setup/progress。
+           一个正在删文件、装依赖的初始化，值得一整屏；把它塞在选项下方，
+           等于让人在「刚改过的表单项」和「正在跑的进度」之间分走注意力。 -->
+      <div v-if="state.error" class="wizard__full">
         <div class="hint hint--block">
           {{ state.error }}
         </div>
@@ -154,8 +164,8 @@ async function onInit(): Promise<void> {
     <!-- 底部吸附区：冲突提示 + 操作条。它在 .wizard__body **之外**，所以上方怎么滚它都不动。
          为什么把冲突提示也收进来：操作条会因为阻断级冲突而禁用，把「为什么禁用」留在
          上面滚走的地方，用户看到的就是一个点不动的按钮。
-         运行期整块撤掉（`showProgress`）：那时选择已被冻结，屏幕该让给进度面板。 -->
-    <div v-if="!showProgress" class="wizard__dock">
+         运行期不再需要整块撤掉它 —— 那时这一页已经整个让给进度页了。 -->
+    <div class="wizard__dock">
       <!-- 骨架态不谈冲突：schema 还没到，此时的「没有冲突」是句假话。 -->
       <ConflictHint
         v-if="!loading"
