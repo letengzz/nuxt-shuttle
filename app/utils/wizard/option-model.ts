@@ -25,11 +25,18 @@ export type {
   WizardSchema,
 } from '#shared/wizard/types';
 
-/** 引擎的五阶段，顺序即执行顺序。与 scripts/init.mjs 的阶段名一一对应。 */
+/**
+ * 引擎的五阶段，顺序即执行顺序。与 scripts/init.mjs 的阶段名一一对应。
+ *
+ * **「安装依赖」在「改写与自举」之前**：改写那一步才把选中的模块写进 nuxt.config.ts，
+ * 而页面本身就跑在 nuxt dev 里 —— 配置一变 dev 服务就重启去加载模块，那时它们必须已经装好。
+ * 反过来会报 NUXT_B8017（模块加载不到）；且安装失败时「还没动过仓库」，
+ * 用户可以直接重试，不必先回滚。
+ */
 export const STAGES = [
   { key: 'plan', label: '计算计划' },
   { key: 'snapshot', label: '备份快照' },
-  { key: 'apply', label: '改写与自举' },
   { key: 'install', label: '安装依赖' },
+  { key: 'apply', label: '改写与自举' },
   { key: 'verify', label: '校验产物' },
 ] as const;

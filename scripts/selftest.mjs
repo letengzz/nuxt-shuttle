@@ -441,6 +441,74 @@ function simulateInstalled(dir) {
       '单选卡片的标题需要 .group--card > legend 才不至于压在卡片边框上',
     );
   });
+
+  g.check('A11 引擎阶段顺序：先装依赖、再改写配置', async () => {
+    // 为什么这条值得单独立一个门禁：顺序错了**不崩、不报错**，只在运行中的 dev 服务里
+    // 炸出 `NUXT_B8017 The module X could not be loaded` —— apply 先把模块写进 nuxt.config.ts，
+    // 而 dev 服务一看到配置变了就重启去加载它们，那一刻模块还没装。
+    // 2026-10-02 就是这么翻车的：安装失败（registry 不通）→ 9 个模块一个没装 →
+    // 配置里却已经声明了它们 → 页面上一片 NUXT_B8017，用户以为「点一下生成就把项目搞坏了」。
+    //
+    // 静态能查的四件事：① 引擎与前端的阶段顺序/文案一致；② 安装调用排在 apply 之前；
+    // ③ apply 守在「安装没失败」后面；④ 安装前那唯一一次写盘不许碰 nuxt.config.ts。
+    const init = readFileSync(join(TEMPLATE_ROOT, 'scripts/init.mjs'), 'utf8');
+
+    const keysMatch = /const STAGE_KEYS = \[([^\]]+)\]/.exec(init);
+    const namesMatch = /const STAGE_NAMES = \[([^\]]+)\]/.exec(init);
+    assert(keysMatch !== null && namesMatch !== null, '找不到 STAGE_KEYS / STAGE_NAMES（被改名了？）');
+    const keys = [...keysMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const names = [...namesMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+
+    eq(keys, ['plan', 'snapshot', 'install', 'apply', 'verify'], '引擎阶段顺序（install 必须在 apply 之前）');
+    eq(names.length, keys.length, '阶段名与阶段键数量必须相等');
+
+    // 前端阶段条自己写了一份 STAGES；两份漂移的症状是「进度条指错阶段」，比对长度不够，顺序也要对。
+    const front = readFileSync(join(TEMPLATE_ROOT, 'app/utils/wizard/option-model.ts'), 'utf8');
+    const pairs = [...front.matchAll(/\{ key: '([^']+)', label: '([^']+)' \}/g)];
+    assert(pairs.length === keys.length, `前端 STAGES 应解析出 ${keys.length} 项，实际 ${pairs.length} 项（写法变了？）`);
+    eq(pairs.map((m) => m[1]), keys, '前端阶段条的 key 顺序必须与引擎一致');
+    eq(pairs.map((m) => m[2]), names, '前端阶段条的文案必须与引擎一致');
+
+    // 判据锚在**带实参的调用点**上：注释里也写着 installStage / applyStage 这两个词，
+    // 用裸子串会被注释骗过去（<dialog> 与 group__desc 那两次都是这么栽的）。
+    const installAt = init.indexOf('await installStage(root, plan, out, failures)');
+    const applyAt = init.indexOf('applyStage(root, ctx, report, failures, out);');
+    assert(installAt > 0, '找不到 installStage 的调用点');
+    assert(applyAt > 0, '找不到 applyStage 的调用点');
+    assert(
+      installAt < applyAt,
+      '安装必须排在 apply 之前：apply 才把模块写进 nuxt.config.ts，'
+      + '模块还不在 node_modules 里时 dev 服务重启就会报 NUXT_B8017',
+    );
+
+    assert(
+      /if \(!failures\.length\) \{\s*stage\(3, 'apply'\)/.test(init),
+      'apply 必须包在 `if (!failures.length)` 里：安装失败就该一次 apply 都不跑，仓库保持点击前的样子',
+    );
+
+    // 安装前唯一一次写盘只许碰 pnpm-workspace.yaml。提前写 nuxt.config 的 modules
+    // 等于把这个 bug 原样放回来，而且连「安装失败」这个触发条件都不再需要。
+    const allow = /function writeAllowBuilds\(root, ctx, report, failures\) \{\s*return rewriteMarker\(root, (\w+)/.exec(init);
+    assert(allow !== null, '找不到 writeAllowBuilds（安装前落 allowBuilds 的那一步）');
+    eq(allow[1], 'WORKSPACE_FILE', '安装前只许写 pnpm-workspace.yaml（NUXT_CONFIG 得等安装成功之后）');
+
+    // 失败时要把 allowBuilds 从快照还原，否则「装依赖失败 = 仓库逐字节不变」不成立
+    assert(
+      /if \(failures\.length\) \{[\s\S]{0,400}?restoreFile\(root, backupDir, WORKSPACE_FILE\)/.test(init),
+      '安装失败必须把 pnpm-workspace.yaml 还原回去，否则仓库不再等于「点初始化之前」',
+    );
+
+    // 第 12 项（`nuxt prepare` / `typecheck`）在依赖没装齐时必须跳过 —— 它会加载
+    // nuxt.config 里声明的模块，装不上就报 `NUXT_B8017 The module X could not be loaded`，
+    // 而那条错误指的是「依赖没装」，长得却像「配置写错了」。
+    // `--skip-install` 这条路径此前是漏的：第 11 项跳过了，没人置 depsMissing，第 12 项于是照跑。
+    const verify = readFileSync(join(TEMPLATE_ROOT, 'scripts/verify.mjs'), 'utf8');
+    assert(
+      /if \(ctx\.skipInstall\) \{[\s\S]{0,900}?ctx\.depsMissing = true;[\s\S]{0,200}?return \{ skip: true, detail: '--skip-install/
+        .test(verify),
+      '第 11 项因 --skip-install 跳过时也必须置 depsMissing，否则第 12 项会跑 nuxt prepare 并报 NUXT_B8017',
+    );
+  });
 }
 
 /* ================================================================== *

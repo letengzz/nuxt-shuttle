@@ -16,7 +16,9 @@
  *   可回滚    阶段 2 的快照能还原到「初始化前」。
  *   只动标记区 配置文件只在 marker 区间内替换，手写区逐字节不动。
  *
- * 五阶段：plan → snapshot → apply → install → verify
+ * 五阶段：plan → snapshot → install → apply → verify
+ * （**先装依赖，再改写配置**。反过来的话，运行中的 dev 服务会在「配置已声明模块、
+ *   模块还不在 node_modules」的窗口里重启并报 NUXT_B8017。详见 STAGE_NAMES 上的注释。）
  *
  * CLI：
  *   node scripts/init.mjs --selection ./s.json --dry-run     只打印计划
@@ -80,8 +82,22 @@ const WORKSPACE_FILE = 'pnpm-workspace.yaml';
 const SCHEMA_VERSION = '1.0.0';
 const TEMPLATE_VERSION = '0.1.0';
 
-const STAGE_NAMES = ['计算计划', '备份快照', '改写与自举', '安装依赖', '校验产物'];
-const STAGE_KEYS = ['plan', 'snapshot', 'apply', 'install', 'verify'];
+/**
+ * 五阶段。**「安装依赖」必须排在「改写与自举」之前**，这不是审美问题：
+ *
+ * `apply` 会把选中的模块写进 `nuxt.config.ts` 的 `modules: [...]`，而引导页本身就跑在
+ * `nuxt dev` 里 —— 配置一变，dev 服务立刻重启去加载这些模块。如果那一刻它们还没装，
+ * Nuxt 会抛 `NUXT_B8017: The module X could not be loaded`，用户看到的就是
+ * 「点一下生成就炸了」。先装后写，重启时模块已经就位。
+ *
+ * 附带的好处更值钱：安装失败时 `apply` 一次都没跑 —— 引导器文件一个没删、配置一行没改、
+ * 生成文件一个没写，仓库与点击前逐字节相同，修好网络直接重试即可。
+ *
+ * 顺序的**唯一**代价是 `pnpm-workspace.yaml` 的 allowBuilds 得提前落盘（见 writeAllowBuilds）：
+ * pnpm 在安装那一刻就按它决定跑不跑依赖的构建脚本，事后补写没用。
+ */
+const STAGE_NAMES = ['计算计划', '备份快照', '安装依赖', '改写与自举', '校验产物'];
+const STAGE_KEYS = ['plan', 'snapshot', 'install', 'apply', 'verify'];
 
 /* ------------------------------------------------------------------ *
  * 参数解析
@@ -552,7 +568,10 @@ function snapshot(root, selection, files, stamp, out) {
 }
 
 /* ------------------------------------------------------------------ *
- * 阶段 3：apply
+ * 阶段 4：apply
+ *
+ * 注意它排在 install **之后**：这里才第一次把选中的模块写进 nuxt.config.ts，
+ * 而那一刻 dev 服务会重启去加载它们。详见 STAGE_NAMES 上的注释。
  * ------------------------------------------------------------------ */
 
 function writeFileTracked(root, rel, content, report, failures) {
@@ -676,6 +695,102 @@ function compactPicked(options, selection) {
   }));
 }
 
+/**
+ * 改写**一个**文件的 marker 区间。
+ *
+ * 抽出来是因为它有两个调用时机，且都必须在「仓库还可能被改到一半」的窗口内完成：
+ *   · 安装**之前**只改 `pnpm-workspace.yaml`（见 writeAllowBuilds）；
+ *   · 安装成功之后，`applyStage` 改全部三个文件（其余两个区间这时早已是空改写，
+ *     文本与原文相同 → 直接跳过，幂等）。
+ *
+ * 返回是否真的写了盘（用于日志与断言）。
+ */
+function rewriteMarker(root, file, ctx, report, failures) {
+  const { sections, plan } = ctx;
+  const abs = resolve(root, file);
+  if (!existsSync(abs)) {
+    failures.push(`找不到 ${file}，无法改写它的 marker 区间`);
+    return false;
+  }
+  const before = readFileSync(abs, 'utf8');
+
+  // 手写区的哈希必须在**改写之前**算：它就是「初始化前的样子」，
+  // 事后没有快照时靠它判断手写区有没有被人动过（第 9 项断言的兜底判据）。
+  if (file === NUXT_CONFIG) {
+    plan.handwritten ??= {};
+    plan.handwritten[NUXT_CONFIG] = createHash('sha256').update(blankSections(before, NUXT_CONFIG), 'utf8').digest('hex');
+  }
+
+  let text = before;
+  for (const key of FILE_SECTION_KEYS[file]) {
+    const body = sections?.[file]?.[key];
+    if (typeof body !== 'string') {
+      failures.push(`${file} 的区间 ${key} 没有渲染结果`);
+      continue;
+    }
+    try {
+      text = rewriteSection(text, markerBegin(file, key), markerEnd(file, key), body);
+    } catch (err) {
+      failures.push(`${file} 的区间 ${key} 改写失败：${err.message}`);
+    }
+  }
+
+  if (text === before) return false;
+
+  // JSON 文件多一道工序：文本替换完必须整份 parse 一遍才能落盘。
+  // 这一步是「用文本替换 JSON」这个做法的安全网 —— 少了它，一次手抖
+  // 就会写出一份语法错误的 package.json，而所有后续命令都会失败。
+  if (file === PACKAGE_JSON) {
+    try {
+      JSON.parse(text);
+    } catch (err) {
+      failures.push(`改写后的 ${PACKAGE_JSON} 不是合法 JSON，已放弃写入（磁盘上仍是原文件）：${err.message}`);
+      return false;
+    }
+  }
+
+  return writeFileTracked(root, file, text, report, failures);
+}
+
+/**
+ * 安装前唯一要落的文件：`pnpm-workspace.yaml` 的 ALLOW_BUILDS 区间。
+ *
+ * 为什么不能等 `applyStage` 再写：pnpm 在**安装那一刻**就按这份清单决定要不要跑依赖的
+ * 构建脚本（pnpm 11 的 strictDepBuilds 默认拒绝执行），事后补写不会让已经跳过的脚本重跑。
+ * 选了 @nuxt/image 时 sharp 的安装脚本就靠它 —— 少了它，症状是「装完了但二进制缺失」，
+ * 而报错信息一个字都不会提 allowBuilds。
+ *
+ * 它是**安装的前置条件，不是初始化产物**：安装没成功就等于这一步没发生过，
+ * 调用方用 restoreFile() 从快照原样放回去，于是「装依赖失败 = 仓库逐字节不变」才成立。
+ */
+function writeAllowBuilds(root, ctx, report, failures) {
+  return rewriteMarker(root, WORKSPACE_FILE, ctx, report, failures);
+}
+
+/**
+ * 把单个文件从快照原样还原（快照记着「当时不存在」的就删掉）。
+ *
+ * 只用于「失败后把安装前的准备动作退回去」这一种场景。整仓回滚走 runRollback()，
+ * 它要把锁与空目录一起收拾干净，职责不同，别合并。
+ */
+function restoreFile(root, backupDir, rel) {
+  const manifestPath = resolve(backupDir, 'manifest.json');
+  if (!existsSync(manifestPath)) return false;
+  const manifest = readJsonFile(manifestPath, '快照的 manifest.json');
+  const entry = manifest.find((item) => item.path === rel);
+  if (!entry) return false;
+
+  const abs = safeJoin(root, rel);
+  if (!entry.existed) {
+    if (existsSync(abs)) unlinkSync(abs);
+    return true;
+  }
+  const from = resolve(backupDir, rel);
+  if (!existsSync(from)) return false;
+  cpSync(from, abs);
+  return true;
+}
+
 function applyStage(root, ctx, report, failures, out) {
   const { plan, sections, templateVars } = ctx;
 
@@ -726,59 +841,17 @@ function applyStage(root, ctx, report, failures, out) {
   removeFiles(root, plan.deleteFiles, allowed, report, failures);
 
   // ④ marker 区间
-  for (const file of MARKER_FILES) {
-    const abs = resolve(root, file);
-    if (!existsSync(abs)) {
-      failures.push(`找不到 ${file}，无法改写它的 marker 区间`);
-      continue;
-    }
-    const before = readFileSync(abs, 'utf8');
-
-    // 手写区的哈希必须在**改写之前**算：它就是「初始化前的样子」，
-    // 事后没有快照时靠它判断手写区有没有被人动过（第 9 项断言的兜底判据）。
-    if (file === NUXT_CONFIG) {
-      plan.handwritten[NUXT_CONFIG] = createHash('sha256').update(blankSections(before, NUXT_CONFIG), 'utf8').digest('hex');
-    }
-
-    let text = before;
-    for (const key of FILE_SECTION_KEYS[file]) {
-      const body = sections?.[file]?.[key];
-      if (typeof body !== 'string') {
-        failures.push(`${file} 的区间 ${key} 没有渲染结果`);
-        continue;
-      }
-      try {
-        text = rewriteSection(text, markerBegin(file, key), markerEnd(file, key), body);
-      } catch (err) {
-        failures.push(`${file} 的区间 ${key} 改写失败：${err.message}`);
-      }
-    }
-
-    if (text === before) continue;
-
-    // JSON 文件多一道工序：文本替换完必须整份 parse 一遍才能落盘。
-    // 这一步是「用文本替换 JSON」这个做法的安全网 —— 少了它，一次手抖
-    // 就会写出一份语法错误的 package.json，而所有后续命令都会失败。
-    if (file === PACKAGE_JSON) {
-      try {
-        JSON.parse(text);
-      } catch (err) {
-        failures.push(`改写后的 ${PACKAGE_JSON} 不是合法 JSON，已放弃写入（磁盘上仍是原文件）：${err.message}`);
-        continue;
-      }
-    }
-
-    writeFileTracked(root, file, text, report, failures);
-  }
+  for (const file of MARKER_FILES) rewriteMarker(root, file, ctx, report, failures);
 
   pruneEmptyDirs(root, report.removed, report);
 }
 
 /**
- * 阶段 2 的收尾：写「小票」+ 清空目录。
+ * 阶段 4 的收尾：写「小票」+ 清空目录。
  *
  * **为什么从 applyStage 里拆出来**：小票要记录 `installed`（安装阶段是否真的跑过），
- * 而安装发生在 apply 之后。留在 applyStage 里就只能记到「还没装」这一个事实，
+ * 而安装发生在**这一步之前**（阶段 3）。留在 applyStage 里就只能在同一个函数里
+ * 先写小票再安装，而那样 `installed` 永远只能记到「还没装」这一个事实，
  * 于是 `--check` 无法区分「跳安装导致的合法缺失」与「依赖被人删了的漂移」。
  * 顺序上它仍必须在所有破坏性动作之后 —— 小票存在 = 引导器已经清干净了。
  *
@@ -829,7 +902,11 @@ function writeConfig(root, ctx, report, failures, out) {
 }
 
 /* ------------------------------------------------------------------ *
- * 阶段 4：install
+ * 阶段 3：install
+ *
+ * 它排在 apply **之前**：先把依赖装好，下一步改写 nuxt.config.ts 时
+ * 模块才已经在 node_modules 里，运行中的 dev 服务重启才不会报 NUXT_B8017。
+ * 安装失败则整条 apply 都不执行 —— 仓库保持点击前的样子，可以直接重试。
  *
  * 跑命令的那套（Windows 的 .cmd 绕行、按行转事件、尾部输出与超时）
  * 现在住在 `scripts/lib/proc.mjs`，与 verify 的第 12 项断言共用。
@@ -1161,22 +1238,40 @@ async function runInit(root, args, out) {
       out.emit({ type: 'log', level: 'info', line: `计划已保存：${BACKUP_DIR}/${stamp}/plan.json` });
     }
 
-    stage(2, 'apply');
-    writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'apply', selection: plan.selection });
-    applyStage(root, ctx, report, failures, out);
+    // 阶段 3：安装依赖。**排在 apply 之前** —— 理由见 STAGE_NAMES 上的注释：
+    // 配置一旦声明模块，dev 服务就会重启去加载它们，那一刻它们必须已经在 node_modules 里。
+    stage(2, 'install');
+    if (args.skipInstall) {
+      // 这里必须**把命令原样打出来**，不能只说「你自己装一下」。
+      // 依赖的版本号由包管理器向 registry 解析后写进 package.json，引擎自己不写版本，
+      // 所以此时 package.json 里**还没有**这批依赖 —— 单纯跑一次 `pnpm install`
+      // 只会装 nuxt，选择的那批包一个都不会出现。少打一条 `add` 就是半小时的困惑。
+      emitInstallHint(plan, out, '--skip-install：未执行安装。要补齐依赖，按顺序执行下面这几条：');
+    } else {
+      writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'install', selection: plan.selection });
+      // allowBuilds 必须赶在 pnpm 之前落盘（pnpm 在安装那一刻就按它决定跑不跑构建脚本）
+      writeAllowBuilds(root, ctx, report, failures);
+      if (!failures.length) await installStage(root, plan, out, failures);
+
+      if (failures.length) {
+        // 安装没成功 → 把 allowBuilds 放回原样，并且**一次 apply 都不执行**：
+        // 引导器文件一个没删、配置一行没改、生成文件一个没写。
+        // 于是「装依赖失败」不会把仓库变成半成品，修好网络直接重试即可。
+        if (restoreFile(root, backupDir, WORKSPACE_FILE)) {
+          out.emit({
+            type: 'log',
+            level: 'info',
+            line: `已还原 ${WORKSPACE_FILE}：安装没成功，这一步不算发生过，仓库保持点「初始化项目」之前的样子`,
+          });
+        }
+        emitInstallHint(plan, out, '装依赖失败。修好网络后可以先手工补上依赖，再回来重跑初始化：');
+      }
+    }
 
     if (!failures.length) {
-      stage(3, 'install');
-      if (args.skipInstall) {
-        // 这里必须**把命令原样打出来**，不能只说「你自己装一下」。
-        // 依赖的版本号由包管理器向 registry 解析后写进 package.json，引擎自己不写版本，
-        // 所以此时 package.json 里**还没有**这批依赖 —— 单纯跑一次 `pnpm install`
-        // 只会装 nuxt，选择的那批包一个都不会出现。少打一条 `add` 就是半小时的困惑。
-        emitInstallHint(plan, out, '--skip-install：未执行安装。要补齐依赖，按顺序执行下面这几条：');
-      } else {
-        writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'install', selection: plan.selection });
-        await installStage(root, plan, out, failures);
-      }
+      stage(3, 'apply');
+      writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'apply', selection: plan.selection });
+      applyStage(root, ctx, report, failures, out);
 
       // 小票必须在 install 之后写：它要记下 `installed`（依赖到底进没进 package.json），
       // 而那是这一刻才知道的事实。写在 apply 里就只能记到「还没装」。

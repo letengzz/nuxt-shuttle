@@ -454,6 +454,13 @@ function checkLock(ctx) {
  */
 function checkInstalled(ctx) {
   if (ctx.skipInstall) {
+    // 依赖是用户**随后**手工装的，此刻还没装 —— 第 12 项必须跟着跳过。
+    // 第 12 项跑的是 `nuxt prepare` / `typecheck`，它们会去加载 nuxt.config 里声明的模块；
+    // 模块没装就报 `NUXT_B8017 The module X could not be loaded`，而那条错误指的是
+    // 「依赖没装」，不是「配置写错了」—— 照着它去改配置是纯浪费时间。
+    // 这里只把 depsMissing 置上、不额外改第 12 项：两条路径（跳安装 / 装了但没装齐）
+    // 的处置本来就该一样，多一个判据就多一处会漂移的地方。
+    ctx.depsMissing = true;
     return { skip: true, detail: '--skip-install：没有跑安装阶段，装完再跑一次 `pnpm verify`' };
   }
 
