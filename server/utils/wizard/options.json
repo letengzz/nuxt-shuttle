@@ -180,7 +180,7 @@
       "label": "渲染模式",
       "column": "right",
       "multiple": false,
-      "renderAs": "cards",
+      "renderAs": "radios",
       "default": "ssr",
       "desc": "决定产物形态与部署方式。三种模式在代码上完全相同，只差一个开关——所以初始化后想改不需要重跑引擎。",
       "options": [
@@ -370,7 +370,7 @@
       "label": "包管理器",
       "column": "right",
       "multiple": false,
-      "renderAs": "select",
+      "renderAs": "radios",
       "default": "pnpm",
       "desc": "只支持 pnpm / npm。yarn 与 bun 各有各自的 workspace 与锁定语义，做成选项意味着引擎要维护四套 install 分支。",
       "options": [

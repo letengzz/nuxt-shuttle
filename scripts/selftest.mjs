@@ -310,15 +310,27 @@ function simulateInstalled(dir) {
     const component = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/OptionGroup.vue'), 'utf8');
     const used = new Set();
     for (const m of component.matchAll(/group\.renderAs === '([^']+)'/g)) used.add(m[1]);
-    // else 兜底分支对应 select
-    if (/<div v-else class="select-row">/.test(component)) used.add('select');
+
+    // 兜底分支（renderAs 落在联合类型之外）必须是**可见的报错**，不能是空 div：
+    // 静默不渲染的后果是「某个分组整块消失」而控制台干干净净，最难定位。
+    assert(
+      /<div v-else class="hint hint--block">/.test(component),
+      'v-else 兜底必须是可见报错，不能静默不渲染',
+    );
 
     const options = JSON.parse(readFileSync(join(TEMPLATE_ROOT, 'server/utils/wizard/options.json'), 'utf8'));
     const inUse = [...new Set(options.groups.map((grp) => grp.renderAs))].sort();
 
-    eq(declared, ['cards', 'checks', 'radios', 'select'], '类型里声明的形态');
+    eq(declared, ['checks', 'radios'], '类型里声明的形态');
     hasAll([...used], inUse, '组件已实现的形态（options.json 里用到的每个都得有分支）');
     eq([...used].sort(), declared, '实现与声明必须一一对应，不留无人使用的形态');
+
+    // 形态与语义的对应关系：单选组一律横向单选按钮，多选组一律复选行。
+    // 这条是 2026-10-02 定下的界面约定（此前单选用过纵向卡片与下拉），
+    // 钉在这里是为了防止「某个分组又冒出一个不属于任何形态的控件」。
+    for (const grp of options.groups) {
+      eq(grp.renderAs, grp.multiple ? 'checks' : 'radios', `${grp.key} 的控件形态`);
+    }
   });
 }
 

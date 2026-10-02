@@ -94,7 +94,20 @@ async function onInit(): Promise<void> {
         />
       </div>
 
+      <!-- 右上角：依赖与变更预览。
+           放在右栏顶部而不是页脚 —— 它是「当前选择的结果」，与右栏那些配置项
+           是同一件事的两面（选完立刻能核对会装什么）；而且折叠/展开只影响右栏，
+           左栏正在挑的技术栈不会被顶来顶去。展开后高度有上限（见 .preview__grid），
+           否则一展开就把下面的分组全推出屏幕。 -->
       <div class="wizard__col">
+        <DependencyPreview
+          :schema="state.schema"
+          :selection="state.selection"
+          :plan="state.plan"
+          :previewing="state.previewing"
+          @preview="wizard.preview()"
+        />
+
         <NuxtConfigPanel
           :groups="rightGroups"
           :model-value="state.selection"
@@ -108,16 +121,6 @@ async function onInit(): Promise<void> {
         <ConflictHint
           :conflicts="orderedConflicts"
           empty-text="当前组合没有已知冲突，可以直接初始化。"
-        />
-      </div>
-
-      <div class="wizard__full">
-        <DependencyPreview
-          :schema="state.schema"
-          :selection="state.selection"
-          :plan="state.plan"
-          :previewing="state.previewing"
-          @preview="wizard.preview()"
         />
       </div>
     </template>

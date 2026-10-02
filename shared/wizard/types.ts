@@ -12,12 +12,14 @@ export type RuleLevel = 'block' | 'warn' | 'info';
 /**
  * 分组的呈现形态。引擎不解释它的样式，只保证取值合法 —— 具体长什么样由前端决定。
  *
- * `radios`：纵向单选按钮组（左侧技术栈用，扫视时先比名称）
- * `cards` ：带标题与说明的卡片（右侧用，每项说明更长）
- * `checks`：复选行（模块、工程开关）
- * `select`：下拉（取值多、语义简单）
+ * `radios`：横向单选按钮组（左右两栏的单选组都用它，候选左右相邻、差别一眼可比）
+ * `checks`：复选行（模块、工程开关；多选，每项带一行说明，保持纵向）
+ *
+ * 只保留这两种是有意的：早先还有 `cards`（带标题与说明的纵向卡片）与 `select`（下拉），
+ * 前者在横向排布下与 `radios` 重复，后者只有两个取值、不如直接摊开成单选按钮。
+ * 留着没人使用的形态会让「实现」与「声明」对不上 —— selftest 的 A10 正是卡这条。
  */
-export type RenderAs = 'radios' | 'cards' | 'checks' | 'select';
+export type RenderAs = 'radios' | 'checks';
 /** 样式入口的槽位：决定它在 `css` 数组里的位置（顺序是唯一的硬约束）。 */
 export type CssSlot = 'base' | 'tokens' | 'base-css' | 'ui';
 

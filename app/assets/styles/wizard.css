@@ -12,13 +12,15 @@
  * =========================================================================== */
 
 /* ---------------------------------------------------------------------------
- * 三区栅格：左侧 = 技术栈身份，右侧 = 运行形态与工程配置，底部 = 操作条
+ * 两栏栅格：左 = 技术栈身份，右 = 依赖与变更预览 + 运行形态与工程配置，底部 = 操作条
  * ------------------------------------------------------------------------- */
 .wizard {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  /* 两侧接近等分：单选按钮组改成横向之后，左右都在「一行里数候选」，
+     宽度需求不再有量级差；左栏略多留一点（1.15 : 1）是因为 UI 框架那组有 5 个候选。 */
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: var(--sp-6);
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: var(--sp-8) var(--sp-4);
   align-items: start;
@@ -77,7 +79,7 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 分组与卡片单选
+ * 分组与横向单选按钮组
  * ------------------------------------------------------------------------- */
 .group + .group {
   margin-top: var(--sp-6);
@@ -94,17 +96,26 @@
   font-size: var(--text-sm);
 }
 
-.card-stack {
-  display: grid;
+/* 横向单选按钮组（左右两栏的单选组都用它）。
+ *
+ * 形态：每个候选一个带边框的小块，整组左右排开，一行放不下才换行。
+ * 为什么是横向：组内是**互斥**关系，横向排布正好呼应「从这几个里挑一个」；
+ * 而且候选彼此相邻时，名字长度、有没有「实验性」标记都是一眼可比的，
+ * 竖排一列反而要上下移动视线。说明与「会装什么」收进元素的 title（悬停可见）——
+ * 信息没删，只是从「一直占着版面」改成「需要时才展开」。
+ * 选中态靠 :has() 驱动（不用 :checked ~ 是为了让 DOM 顺序保持自然）。
+ */
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2);
 }
 
-.card {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0 var(--sp-2);
-  align-items: baseline;
-  padding: var(--sp-3);
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
@@ -112,70 +123,8 @@
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 
-.card:hover {
-  border-color: var(--brand-600);
-}
-
-.card.is-active {
-  border-color: var(--brand-600);
-  background: var(--brand-50);
-}
-
-.card.is-blocked {
-  opacity: 0.55;
-  cursor: not-allowed;
-  border-style: dashed;
-}
-
-.card.is-blocked:hover {
-  border-color: var(--border);
-}
-
-.card input {
-  grid-row: 1 / span 3;
-  margin-top: var(--sp-1);
-  accent-color: var(--brand-600);
-}
-
-.card .desc,
-.card .note {
-  grid-column: 2;
-  font-size: var(--text-sm);
-  color: var(--fg-muted);
-}
-
-.card .note {
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-}
-
-/* 紧凑单选行（左侧技术栈）。
- *
- * 与 .card 的取舍：卡片是「一屏看完全部信息」的读法，适合右栏那几组说明较长的；
- * 左栏三组每项只有一句话，用卡片会把纵向空间吃光，反而看不清有哪几个候选。
- * 这里按 Spring Initializr 的做法压到「每项一行」：名称在左，说明与「会装什么」
- * 收进元素的 title（悬停可见）。行距刻意压到 1px —— 三组共 12 个候选要能在一屏里数完，
- * 候选之间才谈得上对比。
- * 选中态靠 :has() 驱动，不用 :checked ~ 是为了让 DOM 顺序保持自然。
- */
-.radio-stack {
-  display: grid;
-  gap: 1px;
-  justify-items: start; /* 每行宽度按内容，点击热区不铺满整列 */
-}
-
-.radio {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background 0.15s var(--ease);
-}
-
 .radio:hover {
-  background: var(--bg-subtle);
+  border-color: var(--brand-600);
 }
 
 .radio input {
@@ -198,9 +147,10 @@
   white-space: nowrap;
 }
 
-/* 选中：底色 + 加粗变色。单选钮本身很小，只靠它一个信号时，
-   12 个候选里很难一眼看到当前项。 */
+/* 选中：边框 + 底色 + 标签加粗变色。单选钮本身很小，只靠它一个信号时，
+   一行里很难一眼看到当前项 —— 所以「整块」也要变。 */
 .radio:has(input:checked) {
+  border-color: var(--brand-600);
   background: var(--brand-50);
 }
 
@@ -212,10 +162,11 @@
 .radio.is-blocked {
   opacity: 0.5;
   cursor: not-allowed;
+  border-style: dashed;
 }
 
 .radio.is-blocked:hover {
-  background: transparent;
+  border-color: var(--border);
 }
 
 /* 复选行（模块、工程开关） */
@@ -254,14 +205,6 @@
 .row.is-blocked {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-/* 下拉单选 */
-.select-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
 }
 
 /* ---------------------------------------------------------------------------
@@ -318,6 +261,10 @@
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--sp-3);
   margin-top: var(--sp-3);
+  /* 这个面板现在常驻右栏顶部（以前在页脚，展开多一点无所谓）。
+     展开后必须自己能滚，否则「将删除的文件」一长就把下面的分组全推出屏幕。 */
+  max-height: 340px;
+  overflow: auto;
 }
 
 .preview__grid h3 {
@@ -342,7 +289,7 @@
  * 进度面板
  * ------------------------------------------------------------------------- */
 .progress {
-  max-width: 1080px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: var(--sp-8) var(--sp-4);
 }
