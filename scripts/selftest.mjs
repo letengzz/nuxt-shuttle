@@ -325,12 +325,30 @@ function simulateInstalled(dir) {
     hasAll([...used], inUse, '组件已实现的形态（options.json 里用到的每个都得有分支）');
     eq([...used].sort(), declared, '实现与声明必须一一对应，不留无人使用的形态');
 
-    // 形态与语义的对应关系：单选组一律横向单选按钮，多选组一律复选行。
-    // 这条是 2026-10-02 定下的界面约定（此前单选用过纵向卡片与下拉），
+    // 形态与语义的对应关系：单选组一律横向单选按钮，多选组一律「新增 + 可滑动列表」面板。
+    // 这条是 2026-10-02 定下的界面约定（此前单选用过纵向卡片与下拉，多选用过纵向复选行），
     // 钉在这里是为了防止「某个分组又冒出一个不属于任何形态的控件」。
     for (const grp of options.groups) {
       eq(grp.renderAs, grp.multiple ? 'checks' : 'radios', `${grp.key} 的控件形态`);
     }
+
+    // 多选面板是「右上角新增 + 下方可滑动列表 + 选择弹窗」三件套。
+    // 三个部件**缺任何一个都会静默退化**：少了弹窗，「新增」就是个点不动的空按钮；
+    // 少了 max-height，列表一长就回到「把整页撑长」的老样子 —— 那正是这次要摆脱的。
+    const css = readFileSync(join(TEMPLATE_ROOT, 'app/assets/styles/wizard.css'), 'utf8');
+    includes(component, 'class="panel__add"', '多选面板右上角的「新增」按钮');
+    // 这里不能用 includes(component, '<dialog')：注释里也出现了「<dialog>」，
+    // 拿它当判据的话，模板里的弹窗被删掉也照样能过（第一版就是这么写的，变异测试当场抓出来）。
+    // 改成要求「同一个标签里既有 <dialog 又有这个类名」—— `[^>]*` 跨不过 `>`，
+    // 注释里那个已经闭合的 <dialog> 自然落选。
+    assert(
+      /<dialog\s[^>]*class="modal modal--picker"/.test(component),
+      '多选面板的「新增」弹窗必须是原生 <dialog class="modal modal--picker">',
+    );
+    assert(
+      /\.panel__list\s*\{[^}]*max-height/.test(css),
+      '可滑动列表必须封顶（.panel__list 需要 max-height），否则长列表会把页面撑长',
+    );
   });
 }
 

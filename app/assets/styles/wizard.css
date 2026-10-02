@@ -12,7 +12,8 @@
  * =========================================================================== */
 
 /* ---------------------------------------------------------------------------
- * 两栏栅格：左 = 技术栈身份，右 = 依赖与变更预览 + 运行形态与工程配置，底部 = 操作条
+ * 两栏栅格：左 = 技术栈身份，右 = 运行形态与工程配置，底部 = 操作条
+ * （依赖与变更预览不占这两栏 —— 它是弹窗，只在点「预览变更」时出现）
  * ------------------------------------------------------------------------- */
 .wizard {
   display: grid;
@@ -169,42 +170,95 @@
   border-color: var(--border);
 }
 
-/* 复选行（模块、工程开关） */
-.row-stack {
-  display: grid;
-  gap: var(--sp-1);
-}
-
-.row {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0 var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid transparent;
+/* ---------------------------------------------------------------------------
+ * 多选面板（模块、工程开关）：右上角「新增」+ 下方可滑动列表
+ *
+ * 为什么不再把全部候选摊成复选行：这两组是「按需追加」，多数候选长期处于未选中状态，
+ * 把它们的说明一直挂在版面上，换来的是「每次都要滚过一段与自己无关的文字」。
+ * 面板只陈列**已加入的项**，候选与细节放进「新增」弹窗 —— 需要时才展开。
+ * ------------------------------------------------------------------------- */
+.panel {
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  cursor: pointer;
+  background: var(--bg);
+  overflow: hidden; /* 让列表的滚动条贴着圆角裁掉 */
 }
 
-.row:hover {
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
   background: var(--bg-subtle);
 }
 
-.row input {
-  grid-row: 1 / span 3;
-  margin-top: var(--sp-1);
-  accent-color: var(--brand-600);
+.panel__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
 }
 
-.row .desc {
-  grid-column: 2;
-  display: block;
+.panel__count {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel__add {
+  margin-left: auto;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--text-sm);
+}
+
+/* 高度封顶 + 自己滚，是这个形态的核心：
+   不给上限的话，选满 6 个模块照样会把右栏撑长 —— 那正是要摆脱的样子。 */
+.panel__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.panel__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--text-sm);
+}
+
+.panel__item + .panel__item {
+  border-top: 1px solid var(--border);
+}
+
+.panel__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.panel__remove {
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  background: transparent;
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
 
-.row.is-blocked {
-  opacity: 0.55;
-  cursor: not-allowed;
+.panel__remove:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.panel__empty {
+  padding: var(--sp-4) var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  text-align: center;
 }
 
 /* ---------------------------------------------------------------------------
@@ -242,7 +296,167 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 依赖预览（底部折叠区）
+ * 弹窗：预览变更 / 新增选择
+ *
+ * 用原生 <dialog>：焦点陷阱、Esc 关闭、遮罩、背景惰性化全由浏览器负责，
+ * 零依赖也能拿到一套正确的模态行为。
+ *
+ * 唯一必须小心的是 —— **不要在 .modal 上写 display**：UA 给未打开的 dialog 是
+ * display:none，一旦覆盖（比如写 display:flex），关掉的弹窗会一直留在页面上。
+ * 所以布局只写在 [open] 上。
+ * ------------------------------------------------------------------------- */
+.modal {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  max-width: none;
+  max-height: none;
+}
+
+.modal[open] {
+  display: block;
+}
+
+.modal::backdrop {
+  background: rgb(15 23 42 / 45%);
+}
+
+/* 弹窗打开时锁住页面滚动（原生 dialog 不做这件事） */
+html:has(dialog[open]) {
+  overflow: hidden;
+}
+
+/* 面板铺满 dialog 的盒子（见上：dialog 自身没有 padding 与 border），
+   于是「点击事件的目标是 dialog 自己」只可能发生在遮罩上 —— 点遮罩关闭靠这条。 */
+.modal__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - var(--sp-8)));
+  max-height: min(84vh, 720px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 24px 60px rgb(15 23 42 / 28%);
+  overflow: hidden;
+}
+
+/* 预览弹窗要放 7 个清单，宽一些 */
+.modal--wide .modal__panel {
+  width: min(880px, calc(100vw - var(--sp-8)));
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal__title {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.modal__close {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.modal__close:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+/* 滚动条挂在 body 上，头尾保持可见 */
+.modal__body {
+  padding: var(--sp-4);
+  overflow: auto;
+}
+
+.modal__lead {
+  margin: 0 0 var(--sp-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.modal__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.modal__note {
+  margin-right: auto;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* 弹窗里的候选项：名称一行，说明与「会装什么」另起。
+   弹窗里空间足够，不必像页面上的横向单选那样把说明收进 title。 */
+.pick {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.pick:hover {
+  background: var(--bg-subtle);
+}
+
+/* grid-row 的跨度要盖住右侧所有行，否则说明文字会被自动排放到第一列去；
+   align-self 保证复选框不被拉伸到整个跨度的高度。 */
+.pick input {
+  grid-row: 1 / span 6;
+  align-self: start;
+  margin-top: var(--sp-1);
+  accent-color: var(--brand-600);
+}
+
+.pick .desc {
+  grid-column: 2;
+  display: block;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.pick.is-checked {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+}
+
+.pick.is-blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.desc--warn {
+  color: var(--warn);
+}
+
+/* ---------------------------------------------------------------------------
+ * 折叠块与计划清单
+ *
+ * `.preview` 是**可折叠容器**本身（进度面板用它包住日志），
+ * `.preview__*` 是内容排布 —— 预览变更弹窗与进度面板共用这一套，别改名。
  * ------------------------------------------------------------------------- */
 .preview {
   border: 1px solid var(--border);
@@ -256,15 +470,15 @@
   font-weight: 600;
 }
 
+/* 计划清单：依赖 / 文件 / 配置区间。
+   滚动交给外层（弹窗的 .modal__body），这里不再自己封顶 ——
+   否则会出现「弹窗能滚 + 内层也能滚」的两条滚动条。 */
 .preview__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* 每列至少 320px：删除清单里是完整相对路径（最长的近 60 字符），
+     220px 那种窄列会把它挤出可视区，只能横向滚。 */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--sp-3);
-  margin-top: var(--sp-3);
-  /* 这个面板现在常驻右栏顶部（以前在页脚，展开多一点无所谓）。
-     展开后必须自己能滚，否则「将删除的文件」一长就把下面的分组全推出屏幕。 */
-  max-height: 340px;
-  overflow: auto;
 }
 
 .preview__grid h3 {
@@ -278,6 +492,9 @@
   padding-left: 1.1rem;
   font-family: var(--font-mono);
   font-size: 0.8125rem;
+  /* 包名与文件路径没有空格可断，默认只会在斜杠处换行；
+     anywhere 让长路径在列内折行，而不是把弹窗顶出横向滚动条。 */
+  overflow-wrap: anywhere;
 }
 
 .preview__empty {
