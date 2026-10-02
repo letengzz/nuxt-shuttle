@@ -349,6 +349,46 @@ function simulateInstalled(dir) {
       /\.panel__list\s*\{[^}]*max-height/.test(css),
       '可滑动列表必须封顶（.panel__list 需要 max-height），否则长列表会把页面撑长',
     );
+
+    // 卡片化 + 撤掉分组说明（2026-10-02 第二版约定）：每个分组是一张卡片，
+    // 说明只留页首那一句。为什么值得钉 —— 「给某个分组加回一段说明」是**不会报错**的改动：
+    // 没有这条门禁，下一个人把 desc 加回来时测试全绿，而界面已经不是约定的样子了。
+    //
+    // 判据写成 class="group__desc" 而不是裸的 group__desc：wizard.css 与组件注释里都写着
+    // 这个词（都在讲「已经撤掉了」），用裸子串当判据的话，规则被加回来也照样绿 ——
+    // 和 <dialog> 那一次的坑是同一个（注释命中判据）。
+    for (const rel of [
+      'app/components/wizard/OptionGroup.vue',
+      'app/components/wizard/NuxtConfigPanel.vue',
+      'app/pages/setup/index.vue',
+    ]) {
+      assert(
+        !/class="group__desc"/.test(readFileSync(join(TEMPLATE_ROOT, rel), 'utf8')),
+        `${rel} 不应再渲染分组说明（页面上只保留页首那一句）`,
+      );
+    }
+    assert(
+      !/\n\.group__desc\s*\{/.test(css),
+      'wizard.css 里不该再有 .group__desc 规则（说明已撤掉，留着就是给幽灵元素备样式）',
+    );
+
+    // 两种形态必须落到**同一套**卡片语言上：单选组的 fieldset 与多选组的面板
+    // 各自画一遍卡片，任一处漏掉左竖条，两栏看起来就是两种风格。
+    assert(
+      /isPanel \? 'group--panel' : 'group--card'/.test(component),
+      '分组容器要按形态挂 .group--card / .group--panel',
+    );
+    assert(
+      /\.group--card\s*\{[^}]*border-left:\s*3px solid var\(--brand-500\)/.test(css)
+        && /\.panel\s*\{[^}]*border-left:\s*3px solid var\(--brand-500\)/.test(css),
+      '卡片与面板都要有那条 3px 品牌色左竖条（少一处两栏就不是一套语言）',
+    );
+    // 单选卡片的标题是骑在上边框上的 <legend>，靠这条规则给底色与内边距。
+    // 规则没了不会报错，只会让标题压在边框线上 —— 所以钉住。
+    assert(
+      /\.group--card > legend\s*\{/.test(css),
+      '单选卡片的标题需要 .group--card > legend 才不至于压在卡片边框上',
+    );
   });
 }
 

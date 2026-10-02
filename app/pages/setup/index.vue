@@ -2,7 +2,7 @@
 /**
  * 选择页：两栏 + 底部操作条（左技术栈 / 右 Nuxt 配置 / 底「预览变更」与「初始化」）。
  *
- * 三条刻意的设计：
+ * 四条刻意的设计：
  * ① 首次绘制一定是**骨架态**。令牌要从 window.__WIZARD__ 读、选择要从 localStorage 与
  *    URL 读，这些只有浏览器里才有。与其在服务端渲染一份「猜的」默认值再水合时改掉
  *    （那会带来水合不一致），不如先显示骨架，挂载后再拉数据。
@@ -10,6 +10,10 @@
  *    从点下按钮到结束，中间会删文件、装依赖 —— 值得多一次点击。
  * ③ 预览是**弹窗**而不是常驻面板：它是一次性核对，不是要一直盯着的配置；
  *    常驻会把右栏那些真正要反复调的控件挤下去。
+ *
+ * ④ 页面上只留页首这一句说明。七个分组各自的说明（group.desc）不再渲染 ——
+ *    它们与卡片标题讲的是同一件事，撤掉之后两栏才分得出「栏目 → 卡片」两层。
+ *    分组说明本身没丢：悬停候选项、打开「新增」弹窗都还能看到。
  */
 import type { Selection } from '~/utils/wizard/option-model';
 import { useWizard } from '~/utils/wizard/useWizard';
@@ -98,9 +102,6 @@ async function onInit(): Promise<void> {
     <template v-else>
       <div class="wizard__col">
         <h2>技术栈</h2>
-        <p class="group__desc">
-          左栏决定「用什么写」，选完基本不会再改 —— 它更像团队的身份，而不是项目的配置。
-        </p>
         <OptionGroup
           v-for="group in leftGroups"
           :key="group.key"

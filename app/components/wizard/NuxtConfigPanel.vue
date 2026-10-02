@@ -9,6 +9,10 @@
  * 这里只放控件，不放任何「计划产物」。原先它底部挂着「将写入的配置区间」，
  * 但那与依赖清单、删除文件同源，都是**预览变更**的结果 ——
  * 已经一起搬进 DependencyPreview 的弹窗，右栏于是语义单一：改配置的地方。
+ *
+ * 栏目说明也一并撤了：这一侧的语义已经由标题与卡片标题说清，「这一侧决定怎么跑」
+ * 是读一次就不再看的字，占着版面反而稀释卡片之间的层次。唯一保留的说明在页首
+ * （见 app/pages/setup/index.vue），那句是对整个选择页说的。
  */
 // 类型改名为 OptionGroupSpec：下面还要 import 同名的**组件** OptionGroup，
 // 而 `<script setup>` 里一个标识符只能有一个声明 —— 两者同名会被
@@ -29,11 +33,10 @@ const emit = defineEmits<{ 'update:modelValue': [Selection] }>();
 </script>
 
 <template>
-  <section>
+  <!-- wizard__stack 与左栏共用同一套纵向节奏（列内间距、分组间距都由它定）。
+       少了这层 flex 容器，右栏的卡片之间就没有间距，会贴成一片。 -->
+  <section class="wizard__stack">
     <h2>Nuxt 配置</h2>
-    <p class="group__desc">
-      这一侧决定「怎么跑」。初始化后想调整，直接编辑 nuxt.config.ts 的手写区即可，不需要重跑引擎。
-    </p>
 
     <OptionGroup
       v-for="group in groups"

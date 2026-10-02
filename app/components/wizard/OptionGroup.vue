@@ -5,6 +5,13 @@
  *   `checks` —— 「右上角新增 + 下方可滑动列表」的多选面板。候选默认不占版面，
  *               说明与「会装什么」收进「新增」弹窗，需要时再看。
  *
+ * 形态之上套一层统一的「卡片」：每个分组都是一张带左侧品牌色竖条的卡片，
+ * 组标题就是卡片标题 —— 单选组由 <legend> 骑在上边框上，多选组由 .panel 的面板头充当。
+ *
+ * 分组说明（`group.desc`）**不再渲染在页面上**：七段说明里只有页首那句是对整页说的，
+ * 其余六段都在重复标题已经表达的事（如「UI 框架：决定组件从哪来」），撤掉卡片之间才有层次。
+ * `group.desc` 仍有一个去处 —— 多选弹窗的引导语，那里是「正要挑东西」的上下文。
+ *
  * 为什么用原生 <input> 与 <dialog>：
  * ① 键盘导航、屏幕阅读器语义、焦点管理、Esc 关闭、焦点陷阱、遮罩层全部白送，
  *    自己用 div 造要写两百行还写不对；
@@ -125,13 +132,16 @@ function hintFor(opt: OptionItem): string {
 </script>
 
 <template>
-  <!-- 多选面板没有 <legend>（标题在面板头里），所以用它给 fieldset 补一个分组名，
-       否则屏幕阅读器只会念出「分组」两个字。 -->
-  <fieldset class="group" :aria-label="isPanel ? group.label : undefined">
+  <!-- 单选组：fieldset 自己就是卡片（.group--card），<legend> 只能待在上边框上，
+       正好当卡片标题 —— 它不是可换位置的装饰，是 fieldset 语义的一部分。
+       多选面板：卡片由 .panel 充当（面板头右侧要挂「新增」），fieldset 退成无框容器，
+       分组名交给 aria-label —— 否则屏幕阅读器只会念出「分组」两个字。 -->
+  <fieldset
+    class="group"
+    :class="isPanel ? 'group--panel' : 'group--card'"
+    :aria-label="isPanel ? group.label : undefined"
+  >
     <legend v-if="!isPanel">{{ group.label }}</legend>
-    <p v-if="!isPanel && group.desc" class="group__desc">
-      {{ group.desc }}
-    </p>
 
     <!-- 横向单选按钮组：每个候选占一个「○ 名称」的小块，整组左右排开、一行放不下才换行。
          说明与「会装什么」收进 title 悬停显示：信息没有删，只是从「一直占着版面」

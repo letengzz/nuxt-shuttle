@@ -27,8 +27,15 @@
   align-items: start;
 }
 
+/* 页首：整个选择页只剩这一处说明文字（各分组的说明已撤掉），所以给它一块「底板」，
+   而不是让它散在标题下面。左侧品牌色竖条与栏目标题、分组卡片是同一条线索。 */
 .wizard__head {
   grid-column: 1 / -1;
+  padding: var(--sp-4) var(--sp-6);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-500);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
 }
 
 /* 跨满整行的块：骨架态与接管页面的进度面板 */
@@ -41,15 +48,40 @@
 }
 
 .wizard__head p {
+  margin: 0;
   color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* 两栏的纵向节奏。左栏的容器是 .wizard__col，右栏是 NuxtConfigPanel 里的 .wizard__stack ——
+   **分组之间的间距只由这两处的 gap 决定**。别在 .group 上再挂 margin-top：
+   那样左栏会「gap + margin」叠成两份，右栏只有一份，两栏间距对不上。 */
+.wizard__col,
+.wizard__stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* 栏目标题（技术栈 / Nuxt 配置）：左侧一段品牌色短竖条，
+   和页首、每张卡片用的是同一个视觉信号，层级靠同一条线索读出来。 */
+.wizard__col > h2,
+.wizard__stack > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   margin: 0;
 }
 
-.wizard__col {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-6);
-  min-width: 0;
+.wizard__col > h2::before,
+.wizard__stack > h2::before {
+  content: "";
+  flex: none;
+  width: 4px;
+  height: 1.05em;
+  border-radius: 999px;
+  background: var(--brand-500);
 }
 
 .wizard__footer {
@@ -59,6 +91,11 @@
   justify-content: flex-end;
   gap: var(--sp-3);
   flex-wrap: wrap;
+  /* 一条分隔线把它和上面的卡片堆分开：底部操作条不属于任何一栏，
+     没有这条线时它看起来像右栏的最后一张卡片。 */
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
 }
 
 .wizard__footer-status {
@@ -80,21 +117,43 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 分组与横向单选按钮组
+ * 分组卡片
+ *
+ * 每个分组都是一张卡片：1px 边框 + 左侧 3px 品牌色竖条 + 大圆角 + 极浅投影。
+ * 两种形态共用同一套「卡片语言」，差别只在标题从哪来：
+ *   单选组 —— fieldset 自己就是卡片（.group--card），<legend> 骑在上边框上当标题；
+ *   多选面板 —— 卡片由 .panel 充当（面板头右侧要挂「新增」），fieldset 退成无框容器。
+ *
+ * 分组说明（group.desc）已从页面上撤掉，所以这里没有 .group__desc 这条规则 ——
+ * 页面唯一保留的说明在页首。
  * ------------------------------------------------------------------------- */
-.group + .group {
-  margin-top: var(--sp-6);
+.group--card {
+  /* 上内边距特意比下/左右大：<legend> 骑在上边框时是**向下**压进内边距的，
+     给 16px 的话标题会贴住第一行候选按钮，24px 才留出呼吸。 */
+  padding: var(--sp-6) var(--sp-4) var(--sp-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-500);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 6%);
 }
 
-.group > legend {
-  font-size: var(--text-lg);
-  margin-bottom: var(--sp-1);
-}
-
-.group__desc {
-  margin: 0 0 var(--sp-3);
-  color: var(--fg-muted);
+/* 标题胶囊：底色把卡片的上边框盖掉一截，看起来就像「贴」在卡片边缘上。
+   左内边距来自 .group--card 的 padding，正好避开左上角的圆角。 */
+.group--card > legend {
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--fg);
   font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* 多选面板形态：卡片画在 .panel 上，这层容器只承担分组语义，不能再描一遍边框 */
+.group--panel {
+  min-width: 0;
 }
 
 /* 横向单选按钮组（左右两栏的单选组都用它）。
@@ -119,13 +178,16 @@
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg);
+  /* 用浅底而不是与卡片同色：卡片本身就是白底，同色的话这些小块看起来只是「画了几条框」；
+     浅底让它们成为一个个有实体的芯片，选中态（品牌浅底）也更容易跳出来。 */
+  background: var(--bg-subtle);
   cursor: pointer;
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 
 .radio:hover {
   border-color: var(--brand-600);
+  background: var(--bg);
 }
 
 .radio input {
@@ -176,11 +238,16 @@
  * 为什么不再把全部候选摊成复选行：这两组是「按需追加」，多数候选长期处于未选中状态，
  * 把它们的说明一直挂在版面上，换来的是「每次都要滚过一段与自己无关的文字」。
  * 面板只陈列**已加入的项**，候选与细节放进「新增」弹窗 —— 需要时才展开。
+ *
+ * 面板自己就是一张卡片：边框 / 圆角 / 投影 / 左侧竖条与 .group--card 完全一致。
+ * 这两组没有 <legend>（标题在面板头里，右侧要挂「新增」），所以卡片画在这一层。
  * ------------------------------------------------------------------------- */
 .panel {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-left: 3px solid var(--brand-500);
+  border-radius: var(--radius-lg);
   background: var(--bg);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 6%);
   overflow: hidden; /* 让列表的滚动条贴着圆角裁掉 */
 }
 
