@@ -931,6 +931,46 @@ function emitInstallHint(plan, out, headline) {
 }
 
 /**
+ * 把 pnpm 的 `ERR_PNPM_IGNORED_BUILDS` 翻译成「该往哪写一行」。
+ *
+ * 为什么值得单独一段代码：这条错误的原文只有两行 —— 包名列表，加一句
+ * 「Run "pnpm approve-builds" to pick which dependencies should be allowed to run scripts」。
+ * 而 `approve-builds` 是**交互式**的，在引擎这种非交互环境里根本没有用武之地；
+ * 真正的修法是往 `pnpm-workspace.yaml` 的 `allowBuilds` 里补条目，而错误原文
+ * 一个字都没提这件事。不翻译的话，用户看到的是「装依赖失败」加一串包名，
+ * 最贵的那一步（定位到哪个文件的哪一行）完全靠猜。
+ *
+ * @param {string} output 命令输出（尾部若干行即可，错误就在里面）
+ * @returns {string[]|null} 逐行提示；不是这个错误时返回 null，别去打扰用户
+ */
+export function ignoredBuildHint(output) {
+  const text = String(output ?? '');
+  if (!text.includes('ERR_PNPM_IGNORED_BUILDS')) return null;
+
+  // 列表里是「包名@版本」；作用域包名形如 '@parcel/watcher@2.6.0'，
+  // 所以要截到**最后一个** @ 之前（下标 0 的 @ 是作用域前缀，不能截）。
+  const names = (/Ignored build scripts:\s*([^\n]+)/.exec(text)?.[1] ?? '')
+    .split(',')
+    .map((spec) => spec.trim())
+    .map((spec) => {
+      const at = spec.lastIndexOf('@');
+      return at > 0 ? spec.slice(0, at) : spec;
+    })
+    .filter(Boolean);
+
+  if (!names.length) return null;
+
+  // 拼出来的是**给用户粘进 YAML 的**键，所以作用域名必须带引号 —— 裸写会被解析器拒绝。
+  const entries = names.map((name) => `    ${name.startsWith('@') ? `'${name}'` : name}: true`);
+  return [
+    'pnpm 拒绝执行未经审查的安装脚本，安装就此中断 —— allowBuilds 清单少了下面这几个包。',
+    '把它们补进 pnpm-workspace.yaml 的 ALLOW_BUILDS 区间（按需要给 true / false）：',
+    ...entries,
+    '作用域包名必须加引号。不确定该不该跑脚本时，先在项目里跑一次 `pnpm approve-builds` 看一遍。',
+  ];
+}
+
+/**
  * 安装阶段。返回是否**真的把依赖装进去了** ——
  * 这个事实要写进快照，否则 `--check` 无法区分「跳安装导致的合法缺失」与「被人删了的漂移」。
  */
@@ -953,6 +993,13 @@ async function installStage(root, plan, out, failures) {
           : `退出码 ${result.code}`;
       const tail = result.tail.slice(-5).join(' | ');
       failures.push(`${step.label}失败：${why}${tail ? `；末尾输出：${tail}` : ''}`);
+
+      // 已知的、可自助修复的失败，在这里就地翻译成下一步动作。
+      // 只翻译不兜底：安装确实失败了，退出码该是 1 就是 1 —— 但我们不该让用户
+      // 拿着「ERR_PNPM_IGNORED_BUILDS」去搜，明明修法就是一行 YAML。
+      for (const line of ignoredBuildHint(result.tail.join('\n')) ?? []) {
+        out.emit({ type: 'note', message: line });
+      }
       return;
     }
   }
@@ -1413,4 +1460,5 @@ export const internals = {
   snapshot,
   planFromRaw,
   resolvePlan,
+  ignoredBuildHint,
 };

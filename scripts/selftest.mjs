@@ -509,6 +509,43 @@ function simulateInstalled(dir) {
       '第 11 项因 --skip-install 跳过时也必须置 depsMissing，否则第 12 项会跑 nuxt prepare 并报 NUXT_B8017',
     );
   });
+
+  g.check('A12 安装失败要给可自助的下一步：把 ERR_PNPM_IGNORED_BUILDS 翻成该写的那几行', async () => {
+    // 为什么这条值得卡：那条错误的原文只有「包名列表」加一句「跑 pnpm approve-builds」，
+    // 而 approve-builds 是**交互式**命令，在引擎里没有用武之地；真正的修法是往
+    // pnpm-workspace.yaml 的 allowBuilds 里补条目，原文一个字都没提。
+    // 2026-10-02 就是这么卡住的：用户拿到一串包名，只能来问人。
+    //
+    // 判据直接钉在**实测捕获的真实输出**上，不是自己编一句像样的错误。
+    const hint = engineInternals.ignoredBuildHint;
+    const real = '[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: @parcel/watcher@2.6.0, esbuild@0.28.2, unrs-resolver@1.12.2\n'
+      + 'Run "pnpm approve-builds" to pick which dependencies should be allowed to run scripts.';
+
+    const lines = hint(real);
+    assert(Array.isArray(lines) && lines.length > 0, '识别不出 ERR_PNPM_IGNORED_BUILDS');
+
+    // 这几行是给用户**直接粘进 YAML** 的，所以三件事要一起对：包名去掉版本号、
+    // 作用域名带引号、取值写成布尔。
+    eq(
+      lines.filter((line) => /^\s{2,}[^\s]+: (true|false)$/.test(line)).map((line) => line.trim()),
+      ["'@parcel/watcher': true", 'esbuild: true', 'unrs-resolver: true'],
+      '提示里的 YAML 条目',
+    );
+    includes(lines.join('\n'), 'pnpm-workspace.yaml', '提示要指出该改哪个文件');
+
+    // 不是这个错就别出声 —— 每条失败都塞一段猜测，等于把真正有用的那行淹掉。
+    eq(hint('ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/x: fetch failed'), null, '其他错误不该出提示');
+    eq(hint('ERR_PNPM_IGNORED_BUILDS'), null, '只有错误码、没有包名列表时不该出提示');
+    eq(hint(''), null, '空输出不该出提示');
+
+    // 还有调用点：函数写得再好，安装失败的分支不调它也是死代码。
+    assert(
+      /if \(result\.code !== 0\) \{[\s\S]{0,700}?ignoredBuildHint\(result\.tail\.join\('\\n'\)\)/.test(
+        readFileSync(join(TEMPLATE_ROOT, 'scripts/init.mjs'), 'utf8'),
+      ),
+      '安装失败的分支必须调用 ignoredBuildHint 并把提示发给用户',
+    );
+  });
 }
 
 /* ================================================================== *
@@ -627,12 +664,53 @@ function simulateInstalled(dir) {
     eq(ctx.plan.deleteFiles, [...new Set(ctx.plan.deleteFiles)].sort(), '删除清单应去重升序');
   });
 
-  g.check('B9 allowBuilds：选了 image 才追加 sharp；esbuild 恒为 false', async () => {
+  g.check('B9 allowBuilds：闭包里有安装脚本的包必须列全、取值明确', async () => {
     const plain = ctxOf({});
-    includes(plain.sections['pnpm-workspace.yaml'].ALLOW_BUILDS, 'esbuild: false', 'esbuild 恒为 false');
+    const text = plain.sections['pnpm-workspace.yaml'].ALLOW_BUILDS;
+
+    // 这三个是对一棵**装全 5224 个包**的树逐份读 package.json 扫出来的结果 ——
+    // 整个闭包里带 preinstall/install/postinstall 的只有它们。少列任何一个，
+    // pnpm 11（strictDepBuilds 默认真）都会以 ERR_PNPM_IGNORED_BUILDS 退出，
+    // 整个安装走不到头，而那条错误原文完全不提「你该往哪写一行」。
+    hasAll(text, [
+      "'@parcel/watcher': false",
+      'esbuild: false',
+      'unrs-resolver: false',
+    ], '恒定的允许清单');
+
+    // 作用域包名以 @ 开头，YAML 里裸写会被解析器拒绝。判据锚在「行首缩进 + @ + 冒号」
+    // 这个形态上 —— 不是随便找个 @ 子串（注释里就写着 @parcel/watcher）。
+    eq(
+      text.split('\n').filter((line) => /^\s+@[^\s:]+:/.test(line)),
+      [],
+      '作用域包名必须加引号（裸写会被 YAML 解析器拒绝）',
+    );
+
     assert(!plain.plan.allowBuilds.includes('sharp'), '未选 image 时不该出现 sharp');
     const image = ctxOf({ modules: ['image'] });
-    includes(image.sections['pnpm-workspace.yaml'].ALLOW_BUILDS, 'sharp: true', '选了 image 应追加 sharp');
+    const imageText = image.sections['pnpm-workspace.yaml'].ALLOW_BUILDS;
+    includes(imageText, 'sharp: true', '选了 image 应追加 sharp');
+
+    // 两份来源（模板固定清单 + 选项追加）合并后必须去重升序 —— 顺序不稳，
+    // 每次初始化的 diff 都在抖。判据用**带 sharp 的那份**：只查上面那份的话，
+    // 固定清单本来就是有序的，把 sort() 删掉也照样绿（变异测试证实过）。
+    const entries = imageText.split('\n').slice(1).map((line) => line.trim());
+    eq(entries, [...new Set(entries)].sort(), 'allowBuilds 条目应去重升序');
+
+    // 模板仓库自己的 pnpm-workspace.yaml 必须与这份基线**逐字**一致。
+    // 不一致的两种典型后果：①「模板自己能装、初始化后装不上」；
+    // ② 把 pnpm 在本仓库安装失败时自动追加的 `set this to true or false` 占位行提交上去 ——
+    //    占位值不是布尔，下次安装照样报错，属于「提交了一个看起来像配置的报错」。
+    eq(
+      readSection(
+        readFileSync(join(TEMPLATE_ROOT, 'pnpm-workspace.yaml'), 'utf8'),
+        markerBegin('pnpm-workspace.yaml', 'ALLOW_BUILDS'),
+        markerEnd('pnpm-workspace.yaml', 'ALLOW_BUILDS'),
+      ),
+      text,
+      '模板自带的 allowBuilds 区间应与渲染基线逐字一致'
+      + '（pnpm 在本仓库安装时若发现闭包里有没列出的包，会往这里追加 `set this to true or false` 占位行）',
+    );
   });
 
   g.check('B10 安装命令：pnpm 用 add，npm 用 install --save，devDeps 分两次', async () => {

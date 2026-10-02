@@ -2,19 +2,31 @@
 # pnpm 11 起不再读取 package.json 的 "pnpm" 字段，
 # overrides / allowBuilds / onlyBuiltDependencies 这类配置必须写在这里。
 #
-# allowBuilds 控制「哪些依赖允许执行安装脚本」：
-# strictDepBuilds 默认为真，没在这里显式允许的包不会跑 postinstall，
-# 症状是「装完了但二进制缺失」。修法是把它加成 true，
+# allowBuilds 决定「哪些依赖允许执行安装脚本」。它不是优化项而是必需项：
+# pnpm 11 的 strictDepBuilds 默认为真 —— 没在下面出现过的包一律算「未经审查」，
+# `pnpm install` 会直接以 ERR_PNPM_IGNORED_BUILDS 退出。少列一个就装不完，
+# 而那条错误只报包名，不会告诉你该往哪写一行。
+#
+# 所以清单必须覆盖**整个依赖闭包**里带 preinstall/install/postinstall 的包。
+# 下面这三个是对一棵装全 5224 个包的树逐份读 package.json 扫出来的，不是猜的；
+# 复核方式：`pnpm ignored-builds`，或读安装失败时那句 `Ignored build scripts:`。
+#
+# 三个都取 false，理由相同：脚本只做一件事 —— 校验并落位已经由 optionalDependencies
+# 装好的平台二进制（@parcel/watcher-win32-x64、@esbuild/win32-x64、
+# @unrs/resolver-binding-*）。再跑一遍没有收益，离线或受限网络下反而会失败。
+# 真正需要跑脚本的（如 @nuxt/image 带来的 sharp）在初始化时由引擎追加为 true。
 # **不要**用 --ignore-scripts 绕过去（那会连带跳过真正需要的脚本）。
 #
-# 引导期只装了 nuxt，它唯一的构建脚本来自 esbuild。现代 esbuild 的平台二进制
-# 由 optionalDependencies 提供，postinstall 只做校验，因此显式关掉安装更快，
-# 也不依赖网络去拉二进制。
+# 作用域包名以 @ 开头，YAML 里必须加引号，裸写会被解析器拒绝。
 #
-# 初始化时 scripts/init.mjs 会按所选方案重写下面这个区间：
-# 需要跑安装脚本的方案（如 @nuxt/image 的 sharp）会被追加为 true。
+# 初始化时 scripts/init.mjs 会按所选方案重写下面这个区间（区间外的内容原地保留）。
+# 注意：pnpm 在本仓库直接装依赖失败时，会往这个区间里**自动追加**一堆
+# `set this to true or false` 占位行 —— 那是它请你补决定的提示，不是配置。
+# 占位值不是布尔，下次安装照样报错，别把带占位行的版本提交上去（B9 卡着这一点）。
 # ---------------------------------------------------------------------------
 # >>> TEMPLATE:ALLOW_BUILDS
 allowBuilds:
+  '@parcel/watcher': false
   esbuild: false
+  unrs-resolver: false
 # <<< TEMPLATE:ALLOW_BUILDS

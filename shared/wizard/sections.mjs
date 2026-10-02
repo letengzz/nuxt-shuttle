@@ -306,12 +306,40 @@ export function blankSections(text, file) {
   return out;
 }
 
+/**
+ * 模板级决策：依赖闭包里**带安装脚本**的包，逐条给出「跑不跑脚本」。
+ *
+ * 为什么这是必需项而不是优化项：pnpm 11 的 `strictDepBuilds` 默认为真 ——
+ * 没在 `allowBuilds` 里出现过的包一律算「未经审查」，`pnpm install` 直接以
+ * `ERR_PNPM_IGNORED_BUILDS` 退出。少列一个，整个安装就走不到头，而那条错误
+ * 原文只报包名，不会提「你该往哪写一行」。
+ *
+ * 三条都取 false，理由相同：它们的安装脚本只做一件事 —— 校验并落位已经由
+ * `optionalDependencies` 装好的平台二进制（`@parcel/watcher-win32-x64`、
+ * `@esbuild/win32-x64`、`@unrs/resolver-binding-*`）。再跑一遍没有收益，
+ * 在离线或受限网络下反而会失败。
+ *
+ * 这份清单是对一棵**装全 5224 个包**的树逐份读 `package.json` 扫出来的，不是猜的：
+ * 整个闭包里只有这三个带 `preinstall` / `install` / `postinstall`。
+ * 复核方式：`pnpm ignored-builds`（pnpm 11.20+），或在安装失败时读错误里那句
+ * `Ignored build scripts:`。
+ *
+ * 另：`allowBuilds` 的键是包名，**作用域包名以 `@` 开头在 YAML 里必须加引号**，
+ * 裸写会被解析器拒绝。字符串里带引号是为了让拼出来的 YAML 合法，别照抄进 JS。
+ */
+const REVIEWED_ALLOW_BUILDS = [
+  "'@parcel/watcher': false",
+  'esbuild: false',
+  'unrs-resolver: false',
+];
+
 /** 三个文件里所有需要改写的区间内容。返回形状：{ [文件]: { [键]: 内容 } }。 */
 export function renderSections(options, selection, plan) {
-  // esbuild 恒为 false：pnpm 11 默认拒绝执行依赖的安装脚本，而 esbuild 的安装脚本
-  // 只做一件事 —— 校验并落位已经下载好的二进制。让它在联网环境下再跑一遍没有收益，
-  // 在离线/受限环境下反而会失败。这条是模板级决策，不交给选项。
-  const allowBuilds = ['esbuild: false', ...plan.allowBuilds.map((name) => `${name}: true`)];
+  // 排序只为「同样的选择渲染出同样的文件」—— 顺序稳定，diff 才读得懂。
+  const allowBuilds = [
+    ...REVIEWED_ALLOW_BUILDS,
+    ...plan.allowBuilds.map((name) => `${name}: true`),
+  ].sort();
 
   return {
     'nuxt.config.ts': renderNuxtSections(options, selection, plan),
