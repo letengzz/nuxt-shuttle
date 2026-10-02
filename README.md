@@ -50,9 +50,9 @@ nuxt-shuttle/
 │  ├─ pages/
 │  │  ├─ index.vue                   # 引导期：重定向到 /setup
 │  │  └─ setup/
-│  │     ├─ index.vue                # 选择页（三区布局）
-│  │     └─ progress.vue             # 初始化进度面板（SSE 消费端）
-│  ├─ components/wizard/             # 选择页专用控件（初始化时整体删除）
+│  │     ├─ index.vue                # 选择页（只负责「选」）
+│  │     └─ progress.vue             # 初始化进度：独立整页（SSE / 轮询锁文件）
+│  ├─ components/wizard/             # 引导期专用控件（初始化时整体删除）
 │  ├─ assets/styles/
 │  │  ├─ tokens.css                  # 令牌层（保留）
 │  │  ├─ base.css                    # 基础层（保留）
