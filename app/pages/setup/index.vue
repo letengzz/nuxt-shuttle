@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * 选择页：两栏 + 底部操作条（左技术栈 / 右 Nuxt 配置 / 底「预览变更」与「初始化」）。
+ * 选择页：两栏 + 底部吸附区（左技术栈 / 右 Nuxt 配置 / 底「冲突提示 + 操作条」）。
  *
- * 四条刻意的设计：
+ * 五条刻意的设计：
  * ① 首次绘制一定是**骨架态**。令牌要从 window.__WIZARD__ 读、选择要从 localStorage 与
  *    URL 读，这些只有浏览器里才有。与其在服务端渲染一份「猜的」默认值再水合时改掉
  *    （那会带来水合不一致），不如先显示骨架，挂载后再拉数据。
@@ -10,10 +10,12 @@
  *    从点下按钮到结束，中间会删文件、装依赖 —— 值得多一次点击。
  * ③ 预览是**弹窗**而不是常驻面板：它是一次性核对，不是要一直盯着的配置；
  *    常驻会把右栏那些真正要反复调的控件挤下去。
- *
  * ④ 页面上只留页首这一句说明。七个分组各自的说明（group.desc）不再渲染 ——
  *    它们与卡片标题讲的是同一件事，撤掉之后两栏才分得出「栏目 → 卡片」两层。
  *    分组说明本身没丢：悬停候选项、打开「新增」弹窗都还能看到。
+ * ⑤ 底部吸附区（冲突提示 + 操作条）**不随上方内容滚动**。用的不是 position:fixed ——
+ *    那样得给页面预留一段只能靠估算的空白（操作条的文字一换行对不上，就会盖住卡片）；
+ *    而是「外壳固定一屏高 + 内容层自己滚」，吸附区有多高都不影响它是否真的贴底。
  */
 import type { Selection } from '~/utils/wizard/option-model';
 import { useWizard } from '~/utils/wizard/useWizard';
@@ -82,107 +84,118 @@ async function onInit(): Promise<void> {
 
 <template>
   <main class="wizard" :class="{ 'is-running': state.status === 'running' }">
-    <header class="wizard__head">
-      <h1>Nuxt Shuttle · 初始化</h1>
-      <p>
-        选完点「初始化项目」。模板会自删引导器、改写配置区间、装上你选的依赖，
-        产出一份干净的普通 Nuxt 工程 —— 不会有额外的运行时依赖留在产物里。
-      </p>
-    </header>
+    <!-- 滚动区：页首与两栏都在这一层里。页面本身不滚 —— 滚动收到这里，
+         吸附区才可能真的钉在视口下方（见文件头 ⑤）。 -->
+    <div class="wizard__body">
+      <header class="wizard__head">
+        <h1>Nuxt Shuttle · 初始化</h1>
+        <p>
+          选完点「初始化项目」。模板会自删引导器、改写配置区间、装上你选的依赖，
+          产出一份干净的普通 Nuxt 工程 —— 不会有额外的运行时依赖留在产物里。
+        </p>
+      </header>
 
-    <div v-if="loading" class="wizard__full">
-      <div class="skeleton">
-        {{ state.message || '正在读取候选清单…' }}
+      <div v-if="loading" class="wizard__full">
+        <div class="skeleton">
+          {{ state.message || '正在读取候选清单…' }}
+        </div>
+        <div v-if="state.error" class="hint hint--block">
+          {{ state.error }}
+        </div>
       </div>
-      <div v-if="state.error" class="hint hint--block">
-        {{ state.error }}
+
+      <template v-else>
+        <div class="wizard__col">
+          <h2>技术栈</h2>
+          <OptionGroup
+            v-for="group in leftGroups"
+            :key="group.key"
+            :group="group"
+            :model-value="state.selection"
+            :blocked="blockedFor(group.key)"
+            @update:model-value="onUpdate"
+          />
+        </div>
+
+        <div class="wizard__col">
+          <NuxtConfigPanel
+            :groups="rightGroups"
+            :model-value="state.selection"
+            :blocked-for="blockedFor"
+            @update:model-value="onUpdate"
+          />
+        </div>
+      </template>
+
+      <div v-if="showProgress" class="wizard__full">
+        <ProgressStream
+          :stages="stages"
+          :stage-index="state.stageIndex"
+          :status="state.status"
+          :mode="state.mode"
+          :logs="state.logs"
+          :exit-code="state.exitCode"
+          :error="state.error"
+          :engine-plan="state.enginePlan"
+          :remote="state.remote"
+          @detach="wizard.detach()"
+          @retry="wizard.retry()"
+          @refresh="wizard.refreshStatus()"
+        />
+      </div>
+
+      <div v-if="!showProgress && state.error" class="wizard__full">
+        <div class="hint hint--block">
+          {{ state.error }}
+        </div>
       </div>
     </div>
 
-    <template v-else>
-      <div class="wizard__col">
-        <h2>技术栈</h2>
-        <OptionGroup
-          v-for="group in leftGroups"
-          :key="group.key"
-          :group="group"
-          :model-value="state.selection"
-          :blocked="blockedFor(group.key)"
-          @update:model-value="onUpdate"
-        />
-      </div>
-
-      <div class="wizard__col">
-        <NuxtConfigPanel
-          :groups="rightGroups"
-          :model-value="state.selection"
-          :blocked-for="blockedFor"
-          @update:model-value="onUpdate"
-        />
-      </div>
-
-      <div class="wizard__full">
-        <ConflictHint
-          :conflicts="orderedConflicts"
-          empty-text="当前组合没有已知冲突，可以直接初始化。"
-        />
-      </div>
-    </template>
-
-    <div v-if="showProgress" class="wizard__full">
-      <ProgressStream
-        :stages="stages"
-        :stage-index="state.stageIndex"
-        :status="state.status"
-        :mode="state.mode"
-        :logs="state.logs"
-        :exit-code="state.exitCode"
-        :error="state.error"
-        :engine-plan="state.enginePlan"
-        :remote="state.remote"
-        @detach="wizard.detach()"
-        @retry="wizard.retry()"
-        @refresh="wizard.refreshStatus()"
+    <!-- 底部吸附区：冲突提示 + 操作条。它在 .wizard__body **之外**，所以上方怎么滚它都不动。
+         为什么把冲突提示也收进来：操作条会因为阻断级冲突而禁用，把「为什么禁用」留在
+         上面滚走的地方，用户看到的就是一个点不动的按钮。
+         运行期整块撤掉（`showProgress`）：那时选择已被冻结，屏幕该让给进度面板。 -->
+    <div v-if="!showProgress" class="wizard__dock">
+      <!-- 骨架态不谈冲突：schema 还没到，此时的「没有冲突」是句假话。 -->
+      <ConflictHint
+        v-if="!loading"
+        :conflicts="orderedConflicts"
+        empty-text="当前组合没有已知冲突，可以直接初始化。"
       />
-    </div>
 
-    <div v-else class="wizard__footer">
-      <span class="wizard__footer-status">
-        <template v-if="blockConflicts.length">
-          有 {{ blockConflicts.length }} 项阻断级冲突，先按上面的说明调整再提交。
-        </template>
-        <template v-else-if="state.status === 'planned'">
-          计划已计算。确认无误后点「确认并开始初始化」—— 之后会删文件、装依赖，中途不要关闭标签页。
-        </template>
-        <template v-else>
-          尚未计算计划：点「预览变更」先看会删什么、装什么，那一步不动任何文件。
-        </template>
-      </span>
+      <div class="wizard__footer">
+        <span class="wizard__footer-status">
+          <template v-if="blockConflicts.length">
+            有 {{ blockConflicts.length }} 项阻断级冲突，先按上面的说明调整再提交。
+          </template>
+          <template v-else-if="state.status === 'planned'">
+            计划已计算。确认无误后点「确认并开始初始化」—— 之后会删文件、装依赖，中途不要关闭标签页。
+          </template>
+          <template v-else>
+            尚未计算计划：点「预览变更」先看会删什么、装什么，那一步不动任何文件。
+          </template>
+        </span>
 
-      <button type="button" :disabled="!state.schema" @click="wizard.resetSelection()">
-        恢复推荐默认
-      </button>
-      <button type="button" :disabled="!canPreview" @click="openPreview()">
-        {{ state.previewing ? '计算中…' : '预览变更' }}
-      </button>
-      <button
-        type="button"
-        data-primary
-        :disabled="!canStart || blockConflicts.length > 0"
-        @click="onInit()"
-      >
-        {{ state.status === 'planned' ? '确认并开始初始化' : '初始化项目' }}
-      </button>
-    </div>
-
-    <div v-if="!showProgress && state.error" class="wizard__full">
-      <div class="hint hint--block">
-        {{ state.error }}
+        <button type="button" :disabled="!state.schema" @click="wizard.resetSelection()">
+          恢复推荐默认
+        </button>
+        <button type="button" :disabled="!canPreview" @click="openPreview()">
+          {{ state.previewing ? '计算中…' : '预览变更' }}
+        </button>
+        <button
+          type="button"
+          data-primary
+          :disabled="!canStart || blockConflicts.length > 0"
+          @click="onInit()"
+        >
+          {{ state.status === 'planned' ? '确认并开始初始化' : '初始化项目' }}
+        </button>
       </div>
     </div>
 
-    <!-- 预览弹窗挂在栅格之外：`<dialog>` 关闭时是 display:none，不影响两栏布局；
-         打开时由浏览器提到顶层（top layer），也不需要任何 z-index 管理。 -->
+    <!-- 预览弹窗挂在滚动区与吸附区之外：`<dialog>` 关闭时是 display:none，不参与布局；
+         打开时由浏览器提到顶层（top layer），也不需要任何 z-index 管理。
+         留在这一层还有个好处：它不是 .wizard__body 的后代，滚轮落在遮罩上也不会带动背景滚动。 -->
     <DependencyPreview
       :open="previewOpen"
       :schema="state.schema"

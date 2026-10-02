@@ -28,40 +28,44 @@ function onRetry(): void {
 </script>
 
 <template>
+  <!-- 与选择页共用同一层「外壳 + 滚动区」：.wizard 固定一屏高，内容在 .wizard__body 里滚。
+       这一页没有吸附区，滚动区自然占满整屏；不套这层的话，.wizard 的一屏高会把内容挤出去。 -->
   <main class="wizard">
-    <header class="wizard__head">
-      <h1>Nuxt Shuttle · 初始化进度</h1>
-      <p>
-        这一页可以直接刷新：进度来自引擎写的 <code>template.init.lock</code>，
-        不依赖浏览器里保留的会话。关闭标签页也不会中断引擎。
-      </p>
-    </header>
+    <div class="wizard__body">
+      <header class="wizard__head">
+        <h1>Nuxt Shuttle · 初始化进度</h1>
+        <p>
+          这一页可以直接刷新：进度来自引擎写的 <code>template.init.lock</code>，
+          不依赖浏览器里保留的会话。关闭标签页也不会中断引擎。
+        </p>
+      </header>
 
-    <div class="wizard__full">
-      <ProgressStream
-        :stages="stages"
-        :stage-index="state.stageIndex"
-        :status="state.status"
-        :mode="state.mode"
-        :logs="state.logs"
-        :exit-code="state.exitCode"
-        :error="state.error"
-        :engine-plan="state.enginePlan"
-        :remote="state.remote"
-        @detach="wizard.detach()"
-        @retry="onRetry()"
-        @refresh="wizard.refreshStatus()"
-      />
-    </div>
+      <div class="wizard__full">
+        <ProgressStream
+          :stages="stages"
+          :stage-index="state.stageIndex"
+          :status="state.status"
+          :mode="state.mode"
+          :logs="state.logs"
+          :exit-code="state.exitCode"
+          :error="state.error"
+          :engine-plan="state.enginePlan"
+          :remote="state.remote"
+          @detach="wizard.detach()"
+          @retry="onRetry()"
+          @refresh="wizard.refreshStatus()"
+        />
+      </div>
 
-    <div class="wizard__full preview">
-      <p><NuxtLink to="/setup">
-        ← 回到选择页
-      </NuxtLink></p>
-      <p class="preview__empty">
-        如果初始化已经跑完，选择页连同它的路由一起被删掉了，这个链接会 404 —— 那是预期行为，
-        不是出错。整页访问 <code>/</code> 才是初始化后的正确入口。
-      </p>
+      <div class="wizard__full preview">
+        <p><NuxtLink to="/setup">
+          ← 回到选择页
+        </NuxtLink></p>
+        <p class="preview__empty">
+          如果初始化已经跑完，选择页连同它的路由一起被删掉了，这个链接会 404 —— 那是预期行为，
+          不是出错。整页访问 <code>/</code> 才是初始化后的正确入口。
+        </p>
+      </div>
     </div>
   </main>
 </template>

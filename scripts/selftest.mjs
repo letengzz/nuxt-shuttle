@@ -109,6 +109,18 @@ function hasAll(list, expected, label) {
   assert(missing.length === 0, `${label}：缺少 ${JSON.stringify(missing)}（实际 ${JSON.stringify(list)}）`);
 }
 
+/**
+ * 取出某条规则的声明列表（已 trim）。判「有这条声明」时必须用它，不能 includes(css, 'height:')：
+ * 「height:」是「max-height:」的子串，后者会把前者的判据蒙过去 ——
+ * 这正是把固定高度改回上限时，门禁却照绿的原因（与 <dialog> 那次同类的坑）。
+ * 找不到规则时返回 null，由调用方 assert，避免在断言里抛 TypeError（崩溃比失败更难查）。
+ */
+function declarations(css, selector) {
+  const pattern = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`);
+  const body = pattern.exec(css)?.[1];
+  return body === undefined ? null : body.split(';').map((d) => d.trim()).filter(Boolean);
+}
+
 /* ------------------------------------------------------------------ *
  * 夹具
  * ------------------------------------------------------------------ */
@@ -332,9 +344,9 @@ function simulateInstalled(dir) {
       eq(grp.renderAs, grp.multiple ? 'checks' : 'radios', `${grp.key} 的控件形态`);
     }
 
-    // 多选面板是「右上角新增 + 下方可滑动列表 + 选择弹窗」三件套。
+    // 多选面板是「右上角新增 + 下方固定高度列表 + 选择弹窗」三件套。
     // 三个部件**缺任何一个都会静默退化**：少了弹窗，「新增」就是个点不动的空按钮；
-    // 少了 max-height，列表一长就回到「把整页撑长」的老样子 —— 那正是这次要摆脱的。
+    // 高度不写死，列表一长就回到「把整页撑长」的老样子 —— 那正是这次要摆脱的。
     const css = readFileSync(join(TEMPLATE_ROOT, 'app/assets/styles/wizard.css'), 'utf8');
     includes(component, 'class="panel__add"', '多选面板右上角的「新增」按钮');
     // 这里不能用 includes(component, '<dialog')：注释里也出现了「<dialog>」，
@@ -345,9 +357,48 @@ function simulateInstalled(dir) {
       /<dialog\s[^>]*class="modal modal--picker"/.test(component),
       '多选面板的「新增」弹窗必须是原生 <dialog class="modal modal--picker">',
     );
+    // 列表高度必须是**写死**的，不是只给上限（2026-10-02 第三版约定）：
+    // 只给上限时，列表会随选择项数在「两个空位」到 200px 之间伸缩，把下面的面板推上推下，
+    // 两个多选面板也永远对不齐 —— 而它们就并排站在同一栏里。
+    const listDecls = declarations(css, '.panel__list');
+    assert(listDecls !== null, '找不到 .panel__list 规则（选择器被改过？）');
     assert(
-      /\.panel__list\s*\{[^}]*max-height/.test(css),
-      '可滑动列表必须封顶（.panel__list 需要 max-height），否则长列表会把页面撑长',
+      listDecls.some((d) => /^height:\s*var\(--panel-list-h\)$/.test(d)),
+      '列表高度必须写死（.panel__list 需要 `height: var(--panel-list-h)`）—— '
+      + '改回 max-height 就是「随内容伸缩」，两块面板立刻不等高',
+    );
+    assert(
+      /\.panel\s*\{[^}]*--panel-list-h\s*:/.test(css),
+      '--panel-list-h 必须定义在 .panel 上：两块多选面板共用同一个高度才谈得上对齐',
+    );
+
+    // 底部吸附区（2026-10-02 第三版约定）：冲突提示 + 操作条不随内容滚。
+    // 静态能查的是**结构**：页面必须分成「滚动区」与「吸附区」两层，操作条在吸附区里。
+    // 而「滚起来它真的不动」是运行时行为，静态断言证明不了 —— 交给 CDP 那套实测。
+    // 为什么值得钉：把 footer 挪回滚动区里，页面照样渲染、没有报错，
+    // 只是又跟着一起滚了 —— 这类回归肉眼不看滚动是发现不了的。
+    const page = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/index.vue'), 'utf8');
+    assert(page.includes('class="wizard__body"'), '页内容（页首 + 两栏 + 进度面板）必须包在 .wizard__body 里');
+    const dockAt = page.indexOf('class="wizard__dock"');
+    assert(dockAt > 0, '页面必须有 .wizard__dock（底部吸附区）');
+    assert(
+      page.indexOf('class="wizard__footer"') > dockAt,
+      '操作条必须放在 .wizard__dock 里（出现在它之前，就等于还留在滚动区，会跟着一起滚）',
+    );
+    assert(
+      /\.wizard\s*\{[^}]*height:\s*100dvh/.test(css),
+      '外壳必须固定一屏高（.wizard 需要 height: 100dvh），否则吸附区被内容推到屏幕外',
+    );
+    const bodyDecls = declarations(css, '.wizard__body');
+    assert(bodyDecls !== null, '找不到 .wizard__body 规则（滚动区不见了？）');
+    assert(
+      bodyDecls.some((d) => /^min-height:\s*0$/.test(d)) && bodyDecls.some((d) => /^overflow:/.test(d)),
+      '滚动区必须是能自己滚的 flex 子项：.wizard__body 同时需要 overflow 与 min-height: 0 —— '
+      + '少了 min-height: 0 它会被内容撑破、整页又滚起来，吸附是**静默**失效的',
+    );
+    assert(
+      /\.wizard__dock\s*\{[^}]*flex:\s*none/.test(css),
+      '.wizard__dock 不能被压缩（需要 flex: none），否则内容一长它先被挤扁',
     );
 
     // 卡片化 + 撤掉分组说明（2026-10-02 第二版约定）：每个分组是一张卡片，

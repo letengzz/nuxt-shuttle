@@ -2,6 +2,39 @@
   "version": "1.0.0",
   "groups": [
     {
+      "key": "manager",
+      "label": "包管理器",
+      "column": "left",
+      "multiple": false,
+      "renderAs": "radios",
+      "default": "pnpm",
+      "desc": "只支持 pnpm / npm。yarn 与 bun 各有各自的 workspace 与锁定语义，做成选项意味着引擎要维护四套 install 分支。",
+      "options": [
+        {
+          "value": "pnpm",
+          "label": "pnpm",
+          "desc": "磁盘占用小、安装快、lockfile 严格",
+          "note": "写入 pnpm-lock.yaml",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        },
+        {
+          "value": "npm",
+          "label": "npm",
+          "desc": "零额外依赖，CI 里最省事",
+          "note": "写入 package-lock.json；引擎的 install 阶段切换命令",
+          "deps": [],
+          "devDeps": [],
+          "modules": [],
+          "files": [],
+          "css": []
+        }
+      ]
+    },
+    {
       "key": "ui",
       "label": "UI 框架",
       "column": "left",
@@ -361,39 +394,6 @@
           "devDeps": [],
           "modules": [],
           "files": ["Dockerfile", ".dockerignore", "compose.yaml", "deploy/nginx.conf"],
-          "css": []
-        }
-      ]
-    },
-    {
-      "key": "manager",
-      "label": "包管理器",
-      "column": "right",
-      "multiple": false,
-      "renderAs": "radios",
-      "default": "pnpm",
-      "desc": "只支持 pnpm / npm。yarn 与 bun 各有各自的 workspace 与锁定语义，做成选项意味着引擎要维护四套 install 分支。",
-      "options": [
-        {
-          "value": "pnpm",
-          "label": "pnpm",
-          "desc": "磁盘占用小、安装快、lockfile 严格",
-          "note": "写入 pnpm-lock.yaml",
-          "deps": [],
-          "devDeps": [],
-          "modules": [],
-          "files": [],
-          "css": []
-        },
-        {
-          "value": "npm",
-          "label": "npm",
-          "desc": "零额外依赖，CI 里最省事",
-          "note": "写入 package-lock.json；引擎的 install 阶段切换命令",
-          "deps": [],
-          "devDeps": [],
-          "modules": [],
-          "files": [],
           "css": []
         }
       ]
