@@ -8,7 +8,7 @@
  * ③ 这些组件会在初始化时被删除 —— 不值得为它引入任何依赖。
  * 样式靠 :checked 与 :has() 完成，见 app/assets/styles/wizard.css。
  */
-import type { OptionGroup, Selection } from '~/utils/wizard/option-model';
+import type { OptionGroup, OptionItem, Selection } from '~/utils/wizard/option-model';
 
 const props = defineProps<{
   group: OptionGroup;
@@ -38,6 +38,21 @@ function isSelected(value: string): boolean {
   return Array.isArray(selected) ? selected.includes(value) : selected === value;
 }
 
+/**
+ * 紧凑单选行的悬停提示：把「说明 + 会装什么 + 实验性原因」拼成一段。
+ *
+ * 布局上把这三行从可见区拿掉、换取「一行一个候选」的扫视效率，
+ * 但信息不能丢 —— 它们原本存在的理由是「用户不是不知道该选哪个，
+ * 而是不知道选了会带来什么」，所以收进 title 而不是删掉。
+ */
+function hintFor(opt: OptionItem): string {
+  const parts = [opt.desc, opt.note];
+  if (opt.experimental) {
+    parts.push(`实验性：${opt.experimentalReason || '尚未稳定，需用 CLI 的 --force-experimental 显式开启'}`);
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
 function onChange(event: Event): void {
   pick((event.target as HTMLSelectElement).value);
 }
@@ -50,14 +65,19 @@ function onChange(event: Event): void {
       {{ group.desc }}
     </p>
 
-    <!-- 单选按钮组：左侧技术栈用它。标签一行、说明另起一行缩进，
-         与 Spring Initializr 的左栏一致 —— 扫视时先比名字，不用先读一屏说明。 -->
+    <!-- 紧凑单选行：左侧技术栈用它，与 Spring Initializr 的左栏一致 ——
+         每项只占一行「○ 名称」，说明与「会装什么」收进 title 悬停显示。
+         取舍是刻意的：把三行压成一行，候选之间才能一眼横向对比完；
+         信息没有删，只是从「一直占着版面」改成「需要时才展开」。
+         用 title 而不是自造 tooltip：按 HTML-AAM，title 就是表单控件的
+         accessible description，屏幕阅读器拿得到同一份内容，不是只给鼠标用的。 -->
     <div v-if="group.renderAs === 'radios'" class="radio-stack">
       <label
         v-for="opt in group.options"
         :key="opt.value"
         class="radio"
         :class="{ 'is-active': isSelected(opt.value), 'is-blocked': blocked.has(opt.value) }"
+        :title="hintFor(opt)"
       >
         <input
           type="radio"
@@ -67,15 +87,8 @@ function onChange(event: Event): void {
           :disabled="blocked.has(opt.value)"
           @change="pick(opt.value)"
         >
-        <span class="radio__head">
-          <strong>{{ opt.label }}</strong>
-          <span v-if="opt.experimental" class="radio__flag">实验性</span>
-        </span>
-        <span v-if="opt.desc" class="radio__desc">{{ opt.desc }}</span>
-        <span v-if="opt.note" class="radio__note">{{ opt.note }}</span>
-        <span v-if="opt.experimental" class="radio__note">
-          {{ opt.experimentalReason || '尚未稳定，需用 CLI 的 --force-experimental 显式开启' }}
-        </span>
+        <span class="radio__label">{{ opt.label }}</span>
+        <span v-if="opt.experimental" class="radio__flag">实验性</span>
       </label>
     </div>
 

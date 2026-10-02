@@ -149,48 +149,43 @@
   font-size: 0.8125rem;
 }
 
-/* 单选按钮组（左侧技术栈）。
+/* 紧凑单选行（左侧技术栈）。
  *
  * 与 .card 的取舍：卡片是「一屏看完全部信息」的读法，适合右栏那几组说明较长的；
  * 左栏三组每项只有一句话，用卡片会把纵向空间吃光，反而看不清有哪几个候选。
- * 所以这里压成标签一行 + 说明一行，扫视时先比名称。
- * 选中态靠 :has() 驱动，见下方 —— 不用 :checked ~ 是为了让 DOM 顺序保持自然，
- * 顺带让「说明文字」也能参与高亮。
+ * 这里按 Spring Initializr 的做法压到「每项一行」：名称在左，说明与「会装什么」
+ * 收进元素的 title（悬停可见）。行距刻意压到 1px —— 三组共 12 个候选要能在一屏里数完，
+ * 候选之间才谈得上对比。
+ * 选中态靠 :has() 驱动，不用 :checked ~ 是为了让 DOM 顺序保持自然。
  */
 .radio-stack {
   display: grid;
-  gap: var(--sp-2);
+  gap: 1px;
+  justify-items: start; /* 每行宽度按内容，点击热区不铺满整列 */
 }
 
 .radio {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0 var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--border);
-  border-left: 3px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2);
   border-radius: var(--radius);
-  background: var(--bg);
   cursor: pointer;
-  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+  transition: background 0.15s var(--ease);
 }
 
 .radio:hover {
-  border-color: var(--brand-600);
-  border-left-color: var(--border);
+  background: var(--bg-subtle);
 }
 
 .radio input {
-  grid-row: 1 / span 3;
-  margin-top: 2px;
+  margin: 0;
   accent-color: var(--brand-600);
 }
 
-.radio__head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
+.radio__label {
+  font-size: var(--text-sm);
+  line-height: 1.7;
 }
 
 .radio__flag {
@@ -203,37 +198,24 @@
   white-space: nowrap;
 }
 
-.radio__desc,
-.radio__note {
-  grid-column: 2;
-  color: var(--fg-muted);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-
-.radio__note {
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-}
-
-/* 选中：整条加底色 + 左侧色条。左侧色条是这个形态唯一的「强信号」，
-   因为单选按钮本身很小，靠它很难一眼看出选了哪个。 */
+/* 选中：底色 + 加粗变色。单选钮本身很小，只靠它一个信号时，
+   12 个候选里很难一眼看到当前项。 */
 .radio:has(input:checked) {
-  border-color: var(--brand-600);
-  border-left-color: var(--brand-600);
   background: var(--brand-50);
 }
 
+.radio:has(input:checked) .radio__label {
+  color: var(--brand-700);
+  font-weight: 600;
+}
+
 .radio.is-blocked {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
-  border-style: dashed;
-  border-left-style: solid;
 }
 
 .radio.is-blocked:hover {
-  border-color: var(--border);
-  border-left-color: var(--border);
+  background: transparent;
 }
 
 /* 复选行（模块、工程开关） */

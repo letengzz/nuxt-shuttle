@@ -6,10 +6,17 @@
  * 左区是技术栈身份（选完基本不会改），右区是运行形态与工程配置（初始化后常常手动再调）。
  * 把这份差异收在一个组件里，页面只剩下「左 / 右 / 底」三块。
  */
-import type { InitPlan, OptionGroup, Selection } from '~/utils/wizard/option-model';
+// 类型改名为 OptionGroupSpec：下面还要 import 同名的**组件** OptionGroup，
+// 而 `<script setup>` 里一个标识符只能有一个声明 —— 两者同名会被
+// @vue/compiler-sfc 直接判成「different imports aliased to same local name」而报错。
+import type { InitPlan, OptionGroup as OptionGroupSpec, Selection } from '~/utils/wizard/option-model';
+// 必须显式 import：Nuxt 对 components/wizard/ 下的组件按目录加前缀注册，
+// 自动导入的名字是 WizardOptionGroup，模板里写 <OptionGroup> 会**静默**变成一个
+// 未解析的自定义元素 —— 不报错、不警告，页面只是整块空白。
+import OptionGroup from '~/components/wizard/OptionGroup.vue';
 
 const props = defineProps<{
-  groups: OptionGroup[];
+  groups: OptionGroupSpec[];
   modelValue: Selection;
   blockedFor: (key: string) => Set<string>;
   plan?: InitPlan | null;

@@ -8,7 +8,7 @@
       "multiple": false,
       "renderAs": "radios",
       "default": "none",
-      "desc": "决定组件从哪来。列表里的每一行小字写清了「选了会装什么」——选择成本主要来自不确定。",
+      "desc": "决定组件从哪来。悬停任意一项可以看到它会装哪些包、带来哪些文件 —— 选择成本主要来自不确定。",
       "options": [
         {
           "value": "none",
