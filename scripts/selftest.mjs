@@ -474,7 +474,9 @@ function simulateInstalled(dir) {
 
     // 判据锚在**带实参的调用点**上：注释里也写着 installStage / applyStage 这两个词，
     // 用裸子串会被注释骗过去（<dialog> 与 group__desc 那两次都是这么栽的）。
-    const installAt = init.indexOf('await installStage(root, plan, out, failures)');
+    // 只锚到实参前缀：参数往后加（比如把快照目录传进去做回滚）不该让这条门禁误报，
+    // 但 `await installStage(root, plan, out, failures` 仍然只会出现在真正的调用点上。
+    const installAt = init.indexOf('await installStage(root, plan, out, failures');
     const applyAt = init.indexOf('applyStage(root, ctx, report, failures, out);');
     assert(installAt > 0, '找不到 installStage 的调用点');
     assert(applyAt > 0, '找不到 applyStage 的调用点');
@@ -829,6 +831,36 @@ function simulateInstalled(dir) {
     eq(npm.map((s) => s.args.join(' ')), ['install --save a', 'install --save-dev b', 'install'], 'npm 命令');
     eq(installSteps({ lockfile: 'pnpm', deps: [], devDeps: [] }), [], '没有额外依赖时不该有命令');
     eq(installCommands({ lockfile: 'npm', deps: ['a'], devDeps: [] }), ['npm install --save a', 'npm install'], '可粘贴命令');
+  });
+
+  g.check('B10b 跨包管理器：认出 node_modules 归属、把 Link.matches 崩溃翻译成人话', async () => {
+    // 变异对照：同一处标记换成另一种，识别结果必须跟着变，
+    // 否则「检测到 pnpm」这条断言只是恒真式。
+    const pnpmDir = ensureDir(join(RUN_DIR, 'b10b-pnpm-tree'));
+    mkdirSync(join(pnpmDir, 'node_modules', '.pnpm'), { recursive: true });
+    eq(engineInternals.nodeModulesOwner(pnpmDir), 'pnpm', '.pnpm 目录 → pnpm');
+
+    const npmDir = ensureDir(join(RUN_DIR, 'b10b-npm-tree'));
+    mkdirSync(join(npmDir, 'node_modules'), { recursive: true });
+    writeText(npmDir, 'node_modules/.package-lock.json', '{}');
+    eq(engineInternals.nodeModulesOwner(npmDir), 'npm', 'hidden lockfile → npm');
+
+    const unknownDir = ensureDir(join(RUN_DIR, 'b10b-unknown-tree'));
+    mkdirSync(join(unknownDir, 'node_modules'), { recursive: true });
+    eq(engineInternals.nodeModulesOwner(unknownDir), null, '认不出来 → null');
+    const absentDir = ensureDir(join(RUN_DIR, 'b10b-no-tree'));
+    eq(engineInternals.nodeModulesOwner(absentDir), null, '没有 node_modules → null');
+
+    eq(engineInternals.needsModulesSwitch('pnpm', 'npm'), true, 'pnpm 树上装 npm 必须挪开旧树');
+    eq(engineInternals.needsModulesSwitch('npm', 'pnpm'), true, '反向切换同样要挪开');
+    eq(engineInternals.needsModulesSwitch('npm', 'npm'), false, '同一管理器不动');
+    eq(engineInternals.needsModulesSwitch(null, 'npm'), false, '认不出来时不擅自挪');
+
+    const hint = engineInternals.foreignTreeHint("npm error Cannot read properties of null (reading 'matches')");
+    assert(Array.isArray(hint) && hint.length >= 3, 'npm 的 Link.matches 崩溃必须被翻译成可操作提示');
+    assert(hint.some((line) => line.includes('node_modules')), '提示里必须点名 node_modules');
+    eq(engineInternals.foreignTreeHint('ERR_PNPM_IGNORED_BUILDS'), null, '别把别的错误也当成它');
+    eq(engineInternals.foreignTreeHint(''), null, '空输出不误报');
   });
 
   g.check('B11 校验顺序：先断言形状，再归一化，再跑规则', async () => {

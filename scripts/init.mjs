@@ -34,8 +34,8 @@
  * 受限环境里 spawnSync 可能直接失败，进程内调用是唯一可靠的测试形态。
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BASELINE_TARGETS, baselineTemplatePath, generatedTemplatePath } from '../shared/wizard/baseline.mjs';
@@ -78,6 +78,9 @@ const OPTIONS_FILE = 'server/utils/wizard/options.json';
 const NUXT_CONFIG = 'nuxt.config.ts';
 const PACKAGE_JSON = 'package.json';
 const WORKSPACE_FILE = 'pnpm-workspace.yaml';
+
+/** 各包管理器的 lockfile。要进快照：安装失败时新生成/被改写的那份必须能还原。 */
+const LOCKFILE_BY_MANAGER = { npm: 'package-lock.json', pnpm: 'pnpm-lock.yaml' };
 
 const SCHEMA_VERSION = '1.0.0';
 const TEMPLATE_VERSION = '0.1.0';
@@ -178,13 +181,24 @@ export function parseArgs(argv) {
  * 而这类不一致发生在「给机器看的那份」上时，几乎不会被人工发现。
  */
 export function createEmitter({ jsonLines, quiet = false }) {
+  // 安装阶段会重建 node_modules，运行中的 dev 服务可能就此退出、SSE 管道先关。
+  // Node 把 EPIPE 作为 stdout 的 'error' 事件抛出，没人接就是未处理异常 ——
+  // 引擎会在 apply 之前被杀掉，而半删的仓库比「看不到进度」严重得多。
+  // stream.ts 已经保证「客户端断开不杀引擎」，这里补上输出侧的那一半：
+  // 进度由锁文件承载，写不出去就跳过。listenerCount 防止进程内自测反复创建
+  // emitter 时把监听器越堆越多。
+  if (process.stdout.listenerCount('error') === 0) {
+    process.stdout.on('error', () => { /* 进度流断了，引擎继续跑完 */ });
+  }
+
   const emit = (event) => {
-    if (jsonLines) {
-      process.stdout.write(`${JSON.stringify(event)}\n`);
-      return;
+    if (!jsonLines && quiet) return;
+    const line = jsonLines ? `${JSON.stringify(event)}\n` : `${humanize(event)}\n`;
+    try {
+      process.stdout.write(line);
+    } catch {
+      // 同上：连接断开不该让初始化停在半途
     }
-    if (quiet) return;
-    process.stdout.write(`${humanize(event)}\n`);
   };
   return { emit };
 }
@@ -533,6 +547,7 @@ function filesToSnapshot(plan) {
     WORKSPACE_FILE,
     '.npmrc',
     CONFIG_FILE,
+    ...Object.values(LOCKFILE_BY_MANAGER),
     ...BASELINE_TARGETS,
     ...plan.deleteFiles,
     ...plan.generatedFiles,
@@ -920,9 +935,26 @@ function writeConfig(root, ctx, report, failures, out) {
  * 见 `plan.mjs` 里 `installCommands` 的说明：引擎不写依赖版本，所以此时
  * package.json 里还没有这批包 —— 只说「你自己装一下」会让人白跑一趟。
  */
-function emitInstallHint(plan, out, headline) {
+function emitInstallHint(plan, out, headline, root = null) {
   const commands = installCommands(plan);
   out.emit({ type: 'note', message: headline });
+
+  // `--skip-install` 与安装失败之后，用户要照着下面的命令自己补跑，而此刻
+  // node_modules 还是引导期那棵树。不提醒的话，粘一遍 `npm install --save ...`
+  // 只会原样再撞一次 npm/cli#9459 —— 报错里一个字都不会提 node_modules。
+  const owner = root ? nodeModulesOwner(root) : null;
+  if (needsModulesSwitch(owner, plan.lockfile)) {
+    const move = process.platform === 'win32' ? 'move' : 'mv';
+    const backup = process.platform === 'win32'
+      ? `.init-backup\\node_modules-${owner}`
+      : `.init-backup/node_modules-${owner}`;
+    out.emit({
+      type: 'note',
+      message: `注意：当前 node_modules 是 ${owner} 建的，而下面这几条用的是 ${plan.lockfile}。补跑之前先把它挪开，否则 npm 会在符号链接树上直接崩溃：`,
+    });
+    out.emit({ type: 'note', message: `  ${move} node_modules ${backup}` });
+  }
+
   if (!commands.length) {
     out.emit({ type: 'note', message: '这个方案没有额外依赖，只需要确保 npmrc 里已有的依赖装好即可。' });
     return;
@@ -970,17 +1002,124 @@ export function ignoredBuildHint(output) {
   ];
 }
 
+/* ------------------------------------------------------------------ *
+ * 包管理器切换：node_modules 不能叠着用
+ *
+ * 引导期这棵树是 pnpm 装的：顶层是一堆指向 .pnpm/ 的符号链接，还带
+ * .modules.yaml。用户一旦在页面上选 npm，安装阶段就会让 npm 的 arborist
+ * 去读这棵树 —— 它把符号链接当成 Link，dedupe 时 target 解析不到（null），
+ * 于是在 buildIdealTree 里抛
+ *   TypeError: Cannot read properties of null (reading 'matches')
+ * 一条依赖都没装就退出，报错里一个字都不提 node_modules（npm/cli#9459，
+ * npm 10/11 都还在）。换镜像、清缓存、重装多少次都一样。
+ *
+ * 唯一的可靠解法是让 npm 从空目录开始建树。这里用**改名**而不是删除：
+ *   · 同一分区的 renameSync 是原子且瞬时的，天然可回滚；
+ *   · 递归删除在受限环境里会挂住（见 sandbox.mjs 的实测说明），
+ *     而且正在跑的 dev 服务还占着这些文件；
+ *   · 旧树留在快照目录里，安装失败能整个放回去。
+ * ------------------------------------------------------------------ */
+
+/** 认出现有 node_modules 是谁建的；认不出来（不存在 / 手工拼的）返回 null */
+export function nodeModulesOwner(root) {
+  const modules = resolve(root, 'node_modules');
+  if (!existsSync(modules)) return null;
+  if (existsSync(resolve(modules, '.pnpm')) || existsSync(resolve(modules, '.modules.yaml'))) return 'pnpm';
+  if (existsSync(resolve(modules, '.package-lock.json'))) return 'npm';
+  return null;
+}
+
+/** 只有「认得出来且与目标不同」才动手；认不出来时交给包管理器自己判断 */
+export function needsModulesSwitch(owner, target) {
+  return owner !== null && owner !== target;
+}
+
+/**
+ * 把 npm 的 Link.matches 崩溃翻译成下一步动作。
+ * 与 ignoredBuildHint 一样：只翻译不兜底，退出码该是 1 就是 1。
+ */
+export function foreignTreeHint(output) {
+  const text = String(output ?? '');
+  if (!/Cannot read properties of null \(reading 'matches'\)/.test(text) && !/Link\.matches/.test(text)) return null;
+  const move = process.platform === 'win32' ? 'move' : 'mv';
+  const backup = process.platform === 'win32'
+    ? '.init-backup\\node_modules-pnpm'
+    : '.init-backup/node_modules-pnpm';
+  return [
+    'npm 在别的包管理器建的 node_modules 上崩溃了（npm/cli#9459）：它把 pnpm 的符号链接当成 Link，去重时读到空的 target。',
+    '这不是网络问题，也不是依赖版本冲突，清缓存、换镜像、重试多少次都一样。',
+    '把旧树移走再装：',
+    `  ${move} node_modules ${backup}`,
+    '然后重新执行安装命令；完成后重启 dev 服务。',
+  ];
+}
+
+/** 把旧树原地改名为备份。目标在快照目录内（同一分区），重跑时自动换名不覆盖。 */
+function switchNodeModules(root, backupDir, owner, target, out) {
+  const from = resolve(root, 'node_modules');
+  let to = resolve(backupDir, `node_modules-${owner}`);
+  for (let n = 1; existsSync(to); n += 1) to = resolve(backupDir, `node_modules-${owner}-${n}`);
+
+  renameSync(from, to);
+  out.emit({
+    type: 'log',
+    level: 'info',
+    line: `已把 ${owner} 建立的 node_modules 挪到 ${relative(root, to)}，让 ${target} 从空目录开始建树`,
+  });
+  return { from, to };
+}
+
+/** 安装失败时把旧树放回原位；新生成的半棵树也只挪走、不递归删除。 */
+function restoreNodeModules(root, backupDir, moved, out) {
+  if (!moved) return;
+  try {
+    const current = resolve(root, 'node_modules');
+    if (existsSync(current)) {
+      let failed = resolve(backupDir, 'node_modules-failed');
+      for (let n = 1; existsSync(failed); n += 1) failed = resolve(backupDir, `node_modules-failed-${n}`);
+      renameSync(current, failed);
+    }
+    renameSync(moved.to, current);
+    out.emit({ type: 'log', level: 'info', line: '安装失败，已把原来的 node_modules 放回原位' });
+  } catch (err) {
+    out.emit({
+      type: 'log',
+      level: 'error',
+      line: `回滚 node_modules 失败：${err.message}（旧树仍在 ${relative(root, moved.to)}，请手工放回 ${relative(root, moved.from)}）`,
+    });
+  }
+}
+
 /**
  * 安装阶段。返回是否**真的把依赖装进去了** ——
  * 这个事实要写进快照，否则 `--check` 无法区分「跳安装导致的合法缺失」与「被人删了的漂移」。
  */
-async function installStage(root, plan, out, failures) {
+async function installStage(root, plan, out, failures, backupDir) {
   const steps = installSteps(plan);
 
   if (!steps.length) {
     out.emit({ type: 'log', level: 'info', line: '依赖清单为空，跳过安装' });
     plan.installed = true; // 没有依赖要装，视为已完成（不是「跳过」）
     return;
+  }
+
+  const owner = nodeModulesOwner(root);
+  let moved = null;
+  if (needsModulesSwitch(owner, plan.lockfile)) {
+    try {
+      moved = switchNodeModules(root, backupDir, owner, plan.lockfile, out);
+      out.emit({
+        type: 'note',
+        message: `正在把工程从 ${owner} 切换到 ${plan.lockfile}：重建 node_modules 期间进度页可能短暂中断，引擎会继续跑完；结束后请按提示重启 dev 服务。`,
+      });
+    } catch (err) {
+      failures.push(`切换包管理器失败：无法把 ${owner} 建立的 node_modules 挪开（${err.message}）`);
+      out.emit({
+        type: 'note',
+        message: `${plan.lockfile} 不能在 ${owner} 建的符号链接树上安装（npm/cli#9459）。目录多半还被 dev 服务占着：关掉 pnpm dev，把本次选择存成 JSON 后用命令行重跑（node scripts/init.mjs --selection <选择文件>，用法见 README）；或先手工把 node_modules 移走再重试。`,
+      });
+      return;
+    }
   }
 
   for (const step of steps) {
@@ -1000,10 +1139,23 @@ async function installStage(root, plan, out, failures) {
       for (const line of ignoredBuildHint(result.tail.join('\n')) ?? []) {
         out.emit({ type: 'note', message: line });
       }
+      for (const line of foreignTreeHint(result.tail.join('\n')) ?? []) {
+        out.emit({ type: 'note', message: line });
+      }
+      // 安装没成功 → 旧树、package.json、lockfile 全部还原，仓库回到点击前的样子
+      restoreNodeModules(root, backupDir, moved, out);
+      restoreFile(root, backupDir, PACKAGE_JSON);
+      restoreFile(root, backupDir, LOCKFILE_BY_MANAGER[plan.lockfile] ?? LOCKFILE_BY_MANAGER.pnpm);
       return;
     }
   }
   plan.installed = true;
+  if (moved) {
+    out.emit({
+      type: 'note',
+      message: `旧的 ${owner} 依赖树留在 ${relative(root, moved.to)}（没有自动删除，避免误删仍被占用的文件）。确认工程能跑之后可自行删除。`,
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1293,12 +1445,12 @@ async function runInit(root, args, out) {
       // 依赖的版本号由包管理器向 registry 解析后写进 package.json，引擎自己不写版本，
       // 所以此时 package.json 里**还没有**这批依赖 —— 单纯跑一次 `pnpm install`
       // 只会装 nuxt，选择的那批包一个都不会出现。少打一条 `add` 就是半小时的困惑。
-      emitInstallHint(plan, out, '--skip-install：未执行安装。要补齐依赖，按顺序执行下面这几条：');
+      emitInstallHint(plan, out, '--skip-install：未执行安装。要补齐依赖，按顺序执行下面这几条：', root);
     } else {
       writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'install', selection: plan.selection });
       // allowBuilds 必须赶在 pnpm 之前落盘（pnpm 在安装那一刻就按它决定跑不跑构建脚本）
       writeAllowBuilds(root, ctx, report, failures);
-      if (!failures.length) await installStage(root, plan, out, failures);
+      if (!failures.length) await installStage(root, plan, out, failures, backupDir);
 
       if (failures.length) {
         // 安装没成功 → 把 allowBuilds 放回原样，并且**一次 apply 都不执行**：
@@ -1311,7 +1463,7 @@ async function runInit(root, args, out) {
             line: `已还原 ${WORKSPACE_FILE}：安装没成功，这一步不算发生过，仓库保持点「初始化项目」之前的样子`,
           });
         }
-        emitInstallHint(plan, out, '装依赖失败。修好网络后可以先手工补上依赖，再回来重跑初始化：');
+        emitInstallHint(plan, out, '装依赖失败。修好网络后可以先手工补上依赖，再回来重跑初始化：', root);
       }
     }
 
@@ -1461,4 +1613,7 @@ export const internals = {
   planFromRaw,
   resolvePlan,
   ignoredBuildHint,
+  nodeModulesOwner,
+  needsModulesSwitch,
+  foreignTreeHint,
 };
