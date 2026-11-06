@@ -46,6 +46,7 @@ import {
   installCommands,
   installSteps,
   normalizeSelection,
+  pickLockfile,
   validateSelection,
 } from '../shared/wizard/plan.mjs';
 import {
@@ -355,11 +356,18 @@ function planFromOptions(root, rawSelection, args) {
     throw new Error(`选择存在 ${blocked.length} 项阻断级冲突：\n${detail}`);
   }
 
+  // 包管理器不是选项，是磁盘事实：lockfile 在，答案就在。
+  // 用户在这里选 npm 而仓库是 pnpm 装的 node_modules，是安装阶段 eresolve 的直接原因。
+  const lockfile = pickLockfile({
+    hasPnpmLock: existsSync(resolve(root, 'pnpm-lock.yaml')),
+    hasNpmLock: existsSync(resolve(root, 'package-lock.json')),
+  });
+
   const plan = buildPlan(options, {
     selection,
     wizardFiles: WIZARD_FILES,
     keepFiles: KEEP_FILES,
-    lockfile: selection.manager,
+    lockfile,
     conflicts,
   });
 

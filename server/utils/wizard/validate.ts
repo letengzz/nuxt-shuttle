@@ -12,12 +12,15 @@
  *   ③ 补上删除白名单与保留清单。
  */
 import optionsJson from './options.json';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { KEEP_FILES, WIZARD_FILES } from '#shared/wizard/whitelist.mjs';
 import {
   assertShape,
   buildPlan,
   describeSelection,
   normalizeSelection,
+  pickLockfile,
   validateSelection,
 } from '#shared/wizard/plan.mjs';
 import type { Conflict, InitPlan, Selection, WizardSchema } from '#shared/wizard/types';
@@ -75,11 +78,18 @@ export function planSelection(raw: unknown, { allowExperimental = false } = {}):
     });
   }
 
+  // 包管理器不是选项，是磁盘事实：预览与引擎（init.mjs 的 planFromOptions）
+  // 用同一条规则从 lockfile 推断，两边才不可能各说各话。
+  const lockfile = pickLockfile({
+    hasPnpmLock: existsSync(resolve(process.cwd(), 'pnpm-lock.yaml')),
+    hasNpmLock: existsSync(resolve(process.cwd(), 'package-lock.json')),
+  });
+
   const plan = buildPlan(wizardOptions, {
     selection,
     wizardFiles: WIZARD_FILES,
     keepFiles: KEEP_FILES,
-    lockfile: selection.manager as string,
+    lockfile,
     conflicts,
   }) as unknown as InitPlan;
 

@@ -46,6 +46,27 @@ const SLOT_ORDER = { base: 0, tokens: 1, 'base-css': 2, ui: 3 };
 /** 允许的包管理器（选项的价值来自「有人真的会用」，不做四套 install 分支） */
 export const LOCKFILES = ['pnpm', 'npm'];
 
+/**
+ * 由磁盘事实推断包管理器 —— 不许用户选。
+ *
+ * 为什么不能做成选项：包管理器由 lockfile 与 node_modules 的既成事实决定，
+ * 仓库里躺着 pnpm-lock.yaml 却让用户选 npm，结果就是 npm 跑在 pnpm 版
+ * node_modules 上，解析出的依赖树与磁盘完全对不上（eresolve 就是这么来的）。
+ * 引擎与服务端各自用 existsSync 探测后把事实传进来，这里只做纯判定：
+ *   · 只有 pnpm-lock.yaml → pnpm；只有 package-lock.json → npm；
+ *   · 两把并存 → 拒绝（两套包管理器同时管一个仓库，装出来的树不可信）；
+ *   · 都没有（还没装过依赖的干净仓库）→ pnpm（模板默认）。
+ */
+export function pickLockfile({ hasPnpmLock, hasNpmLock }) {
+  if (hasPnpmLock && hasNpmLock) {
+    throw new Error(
+      'pnpm-lock.yaml 与 package-lock.json 并存：两套包管理器都在管这个仓库。删掉不用的那份 lockfile 再初始化',
+    );
+  }
+  if (hasNpmLock) return 'npm';
+  return 'pnpm';
+}
+
 function slotRank(slot) {
   return Object.prototype.hasOwnProperty.call(SLOT_ORDER, slot) ? SLOT_ORDER[slot] : 99;
 }
