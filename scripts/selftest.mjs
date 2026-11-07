@@ -714,6 +714,57 @@ function simulateInstalled(dir) {
       eq(await engineCli([flag, '--log-file', 'x.jsonl']), 2, `${flag} 的 CLI 退出码`);
     }
   });
+
+  g.check('A17 轮询的后台节流与离开守卫：隐藏暂停轮询、引擎在跑时拦截关闭', async () => {
+    // 为什么值得卡：这两条都是「跑起来才看得见」的行为回归 ——
+    // 轮询在后台标签页里每 2 秒打一次 /status，谁也不会注意到它该暂停；
+    // 离开守卫降级轮询后被提前拆掉，关标签页不弹窗，同样一声不吭。
+    // 只能把结构钉在静态断言上。
+    const composable = readFileSync(join(TEMPLATE_ROOT, 'app/utils/wizard/useWizard.ts'), 'utf8');
+
+    // ① 轮询要感知标签页可见性：隐藏暂停、回前台立刻补查一次并恢复。
+    assert(
+      /visibilitychange/.test(composable) && /visibilityState\s*===\s*'visible'/.test(composable),
+      '轮询必须监听 visibilitychange：隐藏暂停、可见恢复',
+    );
+    assert(
+      /function onVisibilityChange[\s\S]{0,900}?resumePolling\(\);[\s\S]{0,200}?refreshStatus\(true\)/.test(composable),
+      '回到前台必须立即补查一次状态（不能干等下一个 2 秒）',
+    );
+    assert(
+      /function stopPolling[\s\S]{0,400}?removeEventListener\('visibilitychange'/.test(composable),
+      'stopPolling 必须拆掉 visibilitychange 监听（终态后不再有隐藏/恢复一说的对象）',
+    );
+
+    // ② 引擎在跑就要有离开守卫：start() 装一份，降级/重进进入轮询时由 refreshStatus 补装，
+    //    终态才拆。判据锚定 installUnloadGuard / removeUnloadGuard 的**调用点**，
+    //    裸词会被注释与函数定义命中。
+    assert(
+      /state\.mode !== 'stream'[\s\S]{0,200}?installUnloadGuard\(\);[\s\S]{0,60}?startPolling\(\);/.test(composable),
+      '刷新重进进入轮询模式时必须补装离开守卫（引擎还在后台跑）',
+    );
+    assert(
+      /if \(state\.mode === 'poll'\) \{[\s\S]{0,300}?\} else \{[\s\S]{0,120}?removeUnloadGuard\(\);/.test(composable),
+      'start 收尾时只有真正收场才拆守卫：降级成轮询后引擎还在跑',
+    );
+    assert(
+      /function retry\(\): void \{[\s\S]{0,120}?removeUnloadGuard\(\);/.test(composable),
+      'retry 必须拆掉离开守卫（重开新一轮时 start 会重装）',
+    );
+
+    // ③ 进度页标题要跟着状态走：初始化动辄几分钟，切走后标签页是唯一的信息源。
+    const progress = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/progress.vue'), 'utf8');
+    assert(/useHead\(\{ title: pageTitle \}\)/.test(progress), '进度页必须用 useHead 绑定动态标题');
+
+    // ④ 只读接口的响应不许被缓存：轮询拿到旧状态比没有进度更糟。
+    for (const [file, name] of [
+      ['server/api/wizard/status.get.ts', 'status'],
+      ['server/api/wizard/schema.get.ts', 'schema'],
+    ]) {
+      const handler = readFileSync(join(TEMPLATE_ROOT, file), 'utf8');
+      assert(/'cache-control',\s*'no-store'/.test(handler), `${name} 接口必须声明 no-store`);
+    }
+  });
 }
 
 /* ================================================================== *

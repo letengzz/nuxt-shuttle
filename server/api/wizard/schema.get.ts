@@ -11,5 +11,7 @@ import { readSchema } from '../../utils/wizard/validate';
 
 export default defineEventHandler((event) => {
   assertWizardReadable(event);
+  // 清单内容跟随 options.json 变化（引导期改配置是常态），不缓存。
+  setResponseHeader(event, 'cache-control', 'no-store');
   return readSchema();
 });

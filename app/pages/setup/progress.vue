@@ -22,6 +22,24 @@ const wizard = useWizard();
 const { state, stages } = wizard;
 
 /**
+ * 标签页标题跟着状态走：跑到哪个阶段、成没成败，切去别的标签页也能瞄一眼。
+ *
+ * 初始化动辄几分钟，用户切走是常态 —— 静态的「Nuxt Shuttle」在这段时间里
+ * 传递不了任何信息；动态标题让「盯着进度」从必须守着这页，变成看一眼标签页就行。
+ * useHead 是响应式的：status / stageIndex 一变，标题跟着变，无需手动管理。
+ */
+const pageTitle = computed(() => {
+  if (state.status === 'running') {
+    const stage = state.stageIndex > -1 ? stages[state.stageIndex]?.label : null;
+    return stage ? `初始化中 · ${stage} — Nuxt Shuttle` : '初始化中 — Nuxt Shuttle';
+  }
+  if (state.status === 'done') return '✅ 初始化完成 — Nuxt Shuttle';
+  if (state.status === 'failed') return '✗ 初始化失败 — Nuxt Shuttle';
+  return '初始化进度 — Nuxt Shuttle';
+});
+useHead({ title: pageTitle });
+
+/**
  * 「这一页有东西可看」—— 判据依次是「本页正开着进度流」→「磁盘上有锁」→「已经初始化过」。
  *
  * 与选择页的分流判据刻意**不对称**，两边合起来才既不互相弹、也不把人挡在外面：

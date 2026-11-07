@@ -87,6 +87,11 @@ function readLogTail(lock: WizardLock | null): string[] {
 export default defineEventHandler((event) => {
   assertWizardReadable(event);
 
+  // 轮询接口的响应绝不能被缓存：状态每 2 秒查一次，任何一层缓存（浏览器、
+  // 代理、dev 服务自身的启发式缓存）都会把「实时进度」变成「迟到的进度」，
+  // 而且锁消失后缓存里的旧状态还会让页面误判。
+  setResponseHeader(event, 'cache-control', 'no-store');
+
   const root = process.cwd();
   const lock = readLock();
 

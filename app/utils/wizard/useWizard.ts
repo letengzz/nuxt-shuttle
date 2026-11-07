@@ -99,6 +99,14 @@ let lastRemoteLogSig = '';
 
 let streamController: AbortController | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * 轮询的「意愿」标记：pollTimer 只表示「现在有没有定时器在跑」，
+ * 而 pollWanted 表示「这条通道是否还应该轮询」。标签页隐藏时我们主动停掉
+ * 定时器（见 onVisibilityChange），但意愿还在 —— 回到前台要靠它恢复，
+ * 不能把「后台暂停」误当成「轮询已结束」。
+ */
+let pollWanted = false;
+let visibilityHandler: (() => void) | null = null;
 let unloadHandler: ((event: BeforeUnloadEvent) => void) | null = null;
 
 /* ------------------------------------------------------------------ *
@@ -382,6 +390,12 @@ export function useWizard() {
     if (state.logs.length > 800) state.logs.splice(0, state.logs.length - 800);
   }
 
+  /**
+   * 离开页面的兜底提醒。装守卫的时机是「引擎还活着」：
+   * start() 起流时装一份；SSE 中断降级成轮询、或刷新重进进入轮询时，
+   * 由 refreshStatus 的 running 分支补装 —— 引擎不因页面关闭而停止，
+   * 这份提醒就必须跟到引擎收场为止（终态分支与 retry 负责拆）。
+   */
   function installUnloadGuard(): void {
     if (!import.meta.client || unloadHandler) return;
     // 从点下按钮到跑完，中间会删文件并装依赖。此时关掉标签页会留下半成品仓库，
@@ -591,10 +605,16 @@ export function useWizard() {
         pushLog('error', state.error);
       }
     } finally {
-      removeUnloadGuard();
       streamController = null;
-      // 降级成轮询时把 mode 留给轮询通道，只有真正收场时才回 idle
-      if (state.mode !== 'poll') state.mode = 'idle';
+      // 降级成轮询时把 mode 留给轮询通道，只有真正收场时才回 idle。
+      // 离开守卫同理：mode 是 poll 意味着引擎多半还在后台跑（fallbackToPoll 已确认过），
+      // 此时关标签页依然危险 —— 守卫留到引擎真正收场（refreshStatus 的各终态分支拆它）。
+      if (state.mode === 'poll') {
+        // 引擎仍在后台执行：什么都不拆
+      } else {
+        state.mode = 'idle';
+        removeUnloadGuard();
+      }
     }
   }
 
@@ -643,12 +663,17 @@ export function useWizard() {
           if (state.mode !== 'stream') {
             state.mode = 'poll';
             state.status = 'running';
+            // 引擎还在跑，关标签页的兜底提醒就要在场：刷新重进走的是这里，
+            // start() 里装的那份守卫在「刷新」这件事上帮不上忙。
+            installUnloadGuard();
             startPolling();
           }
         } else {
           state.status = 'failed';
           state.mode = 'idle';
           stopPolling();
+          // 进程已退出 = 无论结果是成是败，关闭页面都不再有风险
+          removeUnloadGuard();
           state.error = payload.lock?.error ?? '上一次初始化没有正常结束（进程已退出但锁未清理）。';
         }
         return;
@@ -658,6 +683,7 @@ export function useWizard() {
         state.status = 'done';
         state.mode = 'idle';
         stopPolling();
+        removeUnloadGuard();
       } else if (state.mode !== 'stream' && (state.status === 'running' || state.status === 'failed')) {
         // 「本页没有连着进度流」才允许把 running / failed 打回 selecting。
         //
@@ -668,6 +694,7 @@ export function useWizard() {
         state.mode = 'idle';
         state.status = 'selecting';
         stopPolling();
+        removeUnloadGuard();
       }
     } catch (err) {
       if (fromPoll && state.mode === 'poll' && state.status === 'running') {
@@ -679,17 +706,54 @@ export function useWizard() {
     }
   }
 
+  /**
+   * 标签页可见性变化：隐藏时暂停轮询，回到前台立即补查一次并恢复。
+   *
+   * 为什么值得做：后台标签页的定时器照常触发，而每一轮 /status 都要让服务端
+   * 读锁文件 + 截 400 行日志 —— 初始化动辄十几分钟，挂后台的那几个小时里
+   * 绝大多数查询都注定被用户无视。初始化的推进由引擎进程承载，不依赖页面，
+   * 暂停查询没有任何副作用；唯一要做对的是「回前台立刻补一次」，
+   * 否则用户切回来要干等最多 2 秒才能看到最新状态。
+   */
+  function onVisibilityChange(): void {
+    if (!pollWanted) return;
+    if (document.visibilityState === 'visible') {
+      resumePolling();
+      void refreshStatus(true);
+    } else {
+      pausePolling();
+    }
+  }
+
   function startPolling(): void {
-    if (pollTimer) return;
+    pollWanted = true;
+    if (!visibilityHandler && import.meta.client) {
+      visibilityHandler = onVisibilityChange;
+      document.addEventListener('visibilitychange', visibilityHandler);
+    }
+    resumePolling();
+  }
+
+  function resumePolling(): void {
+    if (!pollWanted || pollTimer) return;
     pollTimer = setInterval(() => {
       void refreshStatus(true);
     }, POLL_INTERVAL_MS);
   }
 
-  function stopPolling(): void {
+  function pausePolling(): void {
     if (!pollTimer) return;
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+
+  function stopPolling(): void {
+    pollWanted = false;
+    pausePolling();
+    if (visibilityHandler) {
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      visibilityHandler = null;
+    }
   }
 
   /** 进度页的入口：本页有没有在跑的流，决定走 SSE 还是轮询。 */
@@ -701,6 +765,7 @@ export function useWizard() {
   /** 从头再来（失败后重试走这里，先清掉本地残留的错误态） */
   function retry(): void {
     stopPolling();
+    removeUnloadGuard();
     state.error = '';
     state.exitCode = null;
     state.stageIndex = -1;

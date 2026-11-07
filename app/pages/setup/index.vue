@@ -232,7 +232,9 @@ async function onInit(): Promise<void> {
       />
 
       <div class="wizard__footer">
-        <span class="wizard__footer-status">
+        <!-- role="status"：提示文案（阻断数、计划已算）变化时主动告知辅助技术 ——
+             操作条按钮的可用性由这些文案解释，静默变化会让读屏用户摸不着头脑。 -->
+        <span class="wizard__footer-status" role="status">
           <template v-if="blockConflicts.length">
             有 {{ blockConflicts.length }} 项阻断级冲突，先按上面的说明调整再提交。
           </template>
