@@ -34,7 +34,7 @@
  * 受限环境里 spawnSync 可能直接失败，进程内调用是唯一可靠的测试形态。
  */
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -111,6 +111,7 @@ const VALUE_FLAGS = {
   '--selection': 'selection',
   '--template-config': 'templateConfig',
   '--root': 'root',
+  '--log-file': 'logFile',
 };
 
 const BOOLEAN_FLAGS = {
@@ -129,6 +130,7 @@ export function parseArgs(argv) {
     selection: null,
     templateConfig: null,
     root: null,
+    logFile: null,
     dryRun: false,
     check: false,
     savePlan: false,
@@ -169,6 +171,9 @@ export function parseArgs(argv) {
   if (out.check && (out.dryRun || out.rollback)) {
     throw new Error('--check 与 --dry-run / --rollback 互斥：--check 是只读比对，不会执行任何阶段');
   }
+  if (out.logFile && (out.check || out.rollback)) {
+    throw new Error('--log-file 只在执行初始化时有效：--check 与 --rollback 是只读操作，不许写任何文件');
+  }
   return out;
 }
 
@@ -202,6 +207,29 @@ export function createEmitter({ jsonLines, quiet = false }) {
     }
   };
   return { emit };
+}
+
+/**
+ * 给 out 套一层「事件日志 tee」：事件照常走 out，同时逐行追加到日志文件。
+ *
+ * 用途：进度流被掐断、页面被刷新后，/api/wizard/status 只能从锁文件读到
+ * 「卡在哪一步」；把事件写进文件（--log-file），刷新后的轮询才能拿到完整日志 ——
+ * 而安装报错恰恰是最需要原始输出的那类失败。
+ *
+ * 为什么套在 out 外层、而不是塞进 createEmitter：自测注入的 capturingEmitter
+ * 也要走这条路径，否则「界面初始化」与「CLI 初始化」又分成两套行为。
+ * 文件里写的是 canonical JSON 事件行，与 --json-lines 的格式逐字一致，
+ * 前端用同一个解析器就能吃。
+ */
+export function teeOut(out, logFile) {
+  // 立刻创建文件：路径写不开就在这里抛，别等跑到一半才发现日志根本没在记
+  writeFileSync(logFile, '', 'utf8');
+  return {
+    emit(event) {
+      out.emit(event);
+      appendFileSync(logFile, `${JSON.stringify(event)}\n`, 'utf8');
+    },
+  };
 }
 
 function humanize(event) {
@@ -1434,10 +1462,15 @@ async function runInit(root, args, out) {
   const failures = [];
   const report = { removed: [], failed: [], skipped: [], prunedDirs: [], generated: [], overlaid: [], written: [] };
   const stamp = timestamp();
+  // startedAt 语义是「这次初始化开始的时间」：每个阶段都重写会把它变成「进入当前阶段的时间」，
+  // 进度页的「已运行时长」就会跟着每次换阶段归零。全程只取一次。
+  const startedAt = new Date().toISOString();
+  // 事件日志文件（--log-file）记进锁：刷新后的进度页靠 /api/wizard/status 从锁里找到它
+  const logFile = args.logFile ?? null;
 
   try {
     stage(1, 'snapshot');
-    writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'snapshot', selection: plan.selection });
+    writeLock(root, { pid: process.pid, startedAt, stage: 'snapshot', selection: plan.selection, logFile });
     const backupDir = snapshot(root, plan.selection, filesToSnapshot(plan), stamp, out);
 
     if (args.savePlan) {
@@ -1455,7 +1488,7 @@ async function runInit(root, args, out) {
       // 只会装 nuxt，选择的那批包一个都不会出现。少打一条 `add` 就是半小时的困惑。
       emitInstallHint(plan, out, '--skip-install：未执行安装。要补齐依赖，按顺序执行下面这几条：', root);
     } else {
-      writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'install', selection: plan.selection });
+      writeLock(root, { pid: process.pid, startedAt, stage: 'install', selection: plan.selection, logFile });
       // allowBuilds 必须赶在 pnpm 之前落盘（pnpm 在安装那一刻就按它决定跑不跑构建脚本）
       writeAllowBuilds(root, ctx, report, failures);
       if (!failures.length) await installStage(root, plan, out, failures, backupDir);
@@ -1477,7 +1510,7 @@ async function runInit(root, args, out) {
 
     if (!failures.length) {
       stage(3, 'apply');
-      writeLock(root, { pid: process.pid, startedAt: new Date().toISOString(), stage: 'apply', selection: plan.selection });
+      writeLock(root, { pid: process.pid, startedAt, stage: 'apply', selection: plan.selection, logFile });
       applyStage(root, ctx, report, failures, out);
 
       // 小票必须在 install 之后写：它要记下 `installed`（依赖到底进没进 package.json），
@@ -1509,9 +1542,10 @@ async function runInit(root, args, out) {
     // 否则用户会看到「什么都没发生」然后点第二次。
     writeLock(root, {
       pid: process.pid,
-      startedAt: new Date().toISOString(),
+      startedAt,
       stage: 'failed',
       selection: plan.selection,
+      logFile,
       error: failures.join('\n'),
     });
     out.emit({
@@ -1545,6 +1579,7 @@ export function printHelp(writer = process.stdout) {
     '  --rollback                恢复到最近一次快照（不卸载依赖）',
     '  --save-plan               把计划写到 .init-backup/<时间戳>/plan.json',
     '  --json-lines              每行输出一条 JSON 事件（供接口转发）',
+    '  --log-file <file>          把事件日志逐行追加到该文件（刷新后的进度页靠它恢复日志；--check / --rollback / --dry-run 不写）',
     '  --skip-install            跳过安装阶段',
     '  --force-experimental      解除实验性选项的阻断（CLI 专属，界面不提供）',
     '  --fast                    跳过耗时的校验项（类型检查）',
@@ -1578,8 +1613,13 @@ export async function runCli(argv, options = {}) {
   if (args.rollback) return runRollback(root, out);
   if (args.check) return runCheck(root, out);
 
+  // --log-file 相对路径以仓库根为基准转绝对；tee 只在真正执行时套上 ——
+  // --dry-run 承诺「不写任何文件」，日志文件也不许例外。
+  if (args.logFile) args.logFile = resolve(root, args.logFile);
+  const effectiveOut = args.logFile && !args.dryRun ? teeOut(out, args.logFile) : out;
+
   try {
-    return await runInit(root, args, out);
+    return await runInit(root, args, effectiveOut);
   } catch (err) {
     out.emit({ type: 'error', stage: 'fatal', message: err.message });
     out.emit({ type: 'exit', code: 1 });

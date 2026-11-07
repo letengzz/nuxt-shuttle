@@ -145,9 +145,21 @@
   pointer-events: none;
 }
 
+/* 骨架/错误态下「重新加载候选清单」按钮的容器：居中，与骨架块留一口气 */
+.wizard__retry {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--sp-3);
+}
+
+/* 窄屏：两栏收成单栏。
+   注意判据必须落在 .wizard__body 上 —— 栅格声明在它那里；.wizard 本身是
+   flex 外壳（此前的断点误写在 .wizard 上，等于什么都没改，两栏在手机上
+   被硬挤成两条细缝）。 */
 @media (max-width: 860px) {
-  .wizard {
+  .wizard__body {
     grid-template-columns: 1fr;
+    padding: var(--sp-4) var(--sp-2);
   }
 }
 
@@ -659,9 +671,28 @@ html:has(dialog[open]) {
   color: var(--fg);
 }
 
+.steps__elapsed {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
 .log {
   max-height: 320px;
   overflow: auto;
+}
+
+/* 日志区上方的小工具条：目前只有「复制日志」。按钮退成小号灰字，
+   不与执行摘要的清单抢层级。 */
+.log-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-2);
+}
+
+.log-tools button {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--text-sm);
 }
 
 .log__line {

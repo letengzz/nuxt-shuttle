@@ -61,6 +61,8 @@ export interface WizardLock {
   stage?: string;
   /** 开始时的选择快照，`--rollback` 靠它恢复 */
   selection?: Selection;
+  /** 事件日志文件（--log-file）的绝对路径。刷新后的进度页靠它恢复完整日志 */
+  logFile?: string | null;
   /** 失败原因原文。成功时不存在此字段 */
   error?: string | null;
 }

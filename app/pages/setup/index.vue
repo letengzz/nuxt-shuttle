@@ -72,6 +72,57 @@ const loading = computed(() => !state.schema);
 
 const previewOpen = ref(false);
 
+/**
+ * 复制分享链接。URL 的 query 本来就承载着完整选择（见 useWizard.syncQuery），
+ * 所以「分享技术栈」不需要新接口，把当前链接发出去即可。
+ * 反馈只亮 2.5 秒：按钮文案回位，避免「已复制」变成一个永久状态。
+ */
+const shareState = ref<'idle' | 'copied' | 'failed'>('idle');
+let shareTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function copyShareLink(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(wizard.shareUrl.value);
+    shareState.value = 'copied';
+  } catch {
+    // 剪贴板权限被拒（localhost 是安全上下文，正常走不到）：指条手动路，别留死按钮
+    shareState.value = 'failed';
+  }
+  if (shareTimer) clearTimeout(shareTimer);
+  shareTimer = setTimeout(() => {
+    shareState.value = 'idle';
+    shareTimer = null;
+  }, 2500);
+}
+
+onBeforeUnmount(() => {
+  if (shareTimer) clearTimeout(shareTimer);
+});
+
+/** 清单加载失败后的重试入口（用具名函数而不是内联 wizard.load()，职责更清楚） */
+function reloadSchema(): void {
+  void wizard.load();
+}
+
+/**
+ * 把当前选择导出成 selection.json。
+ *
+ * 引擎的 --selection 参数吃的就是这份裸 Selection 对象（与引导器接口写盘的
+ * 格式一致），所以导出后可以直接离线重放：
+ *   node scripts/init.mjs --selection selection.json --dry-run
+ * 适用场景：把技术栈决定存档、发给不便于开 dev 服务的同事、
+ * 或在自动化脚本里复现一次完全相同的初始化。
+ */
+function exportSelection(): void {
+  const payload = JSON.stringify(state.selection, null, 2);
+  const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'selection.json';
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 function onUpdate(next: Selection): void {
   wizard.updateSelection(next);
 }
@@ -120,11 +171,18 @@ async function onInit(): Promise<void> {
       </header>
 
       <div v-if="loading" class="wizard__full">
-        <div class="skeleton">
+        <!-- role="status"：骨架文案（含失败原因）变化时主动告知辅助技术 -->
+        <div class="skeleton" role="status">
           {{ state.message || '正在读取候选清单…' }}
         </div>
         <div v-if="state.error" class="hint hint--block">
           {{ state.error }}
+        </div>
+        <!-- 清单读取失败给一条显式重试路：此前这里只有错误文案，
+             唯一的恢复手段是手动刷新整页 —— 而刷新恰恰会把 URL 之外的
+             本地状态一起抖掉。 -->
+        <div v-if="state.error" class="wizard__retry">
+          <button type="button" data-primary @click="reloadSchema()">重新加载候选清单</button>
         </div>
       </div>
 
@@ -186,6 +244,22 @@ async function onInit(): Promise<void> {
           </template>
         </span>
 
+        <button
+          type="button"
+          :disabled="!state.schema"
+          title="下载 selection.json：可用 node scripts/init.mjs --selection selection.json 离线重放，或留作选择快照"
+          @click="exportSelection()"
+        >
+          导出选择文件
+        </button>
+        <button
+          type="button"
+          :disabled="!state.schema"
+          :title="`当前链接已包含全部选择：${wizard.shareUrl.value}`"
+          @click="copyShareLink()"
+        >
+          {{ shareState === 'copied' ? '已复制分享链接' : shareState === 'failed' ? '复制失败，请手动复制地址栏' : '复制分享链接' }}
+        </button>
         <button type="button" :disabled="!state.schema" @click="wizard.resetSelection()">
           恢复推荐默认
         </button>

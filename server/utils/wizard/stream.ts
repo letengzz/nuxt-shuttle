@@ -54,8 +54,11 @@ export async function streamInit(event: H3Event, { selection }: { selection: Sel
   }
 
   // 选择写进系统临时目录：仓库此刻正在被改写，不适合再往里放中间文件。
+  // 事件日志（--log-file）放在同一个临时目录：引擎把 tee 的路径记进锁文件，
+  // /api/wizard/status 就能从锁里找到它 —— 刷新后重进的进度页才看得到完整日志。
   const dir = await mkdtemp(join(tmpdir(), 'nuxt-shuttle-init-'));
   const selectionFile = join(dir, 'selection.json');
+  const logFile = join(dir, 'events.jsonl');
   await writeFile(selectionFile, JSON.stringify(selection, null, 2), 'utf8');
 
   const res = event.node.res;
@@ -92,11 +95,15 @@ export async function streamInit(event: H3Event, { selection }: { selection: Sel
   };
 
   // shell 为 false、参数走数组：deps 已在服务端过白名单，但任何用户可控值都不该经过 shell 解析。
-  const child = spawn(process.execPath, [enginePath, '--selection', selectionFile, '--json-lines'], {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
+  const child = spawn(
+    process.execPath,
+    [enginePath, '--selection', selectionFile, '--log-file', logFile, '--json-lines'],
+    {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    },
+  );
 
   const stdoutReader = lineReader(sendLine);
   const stderrReader = lineReader((line) => {

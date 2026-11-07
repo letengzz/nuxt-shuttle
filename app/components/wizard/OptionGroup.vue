@@ -24,8 +24,8 @@ import type { OptionGroup, OptionItem, Selection } from '~/utils/wizard/option-m
 const props = defineProps<{
   group: OptionGroup;
   modelValue: Selection;
-  /** 本分组里被 block 规则禁掉的 value */
-  blocked: Set<string>;
+  /** 本分组里被 block 规则禁掉的 value（只读：组件只判 has，不该有能力改它） */
+  blocked: ReadonlySet<string>;
 }>();
 
 const emit = defineEmits<{ 'update:modelValue': [Selection] }>();

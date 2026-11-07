@@ -26,17 +26,31 @@ export type WizardStatus = 'idle' | 'loading' | 'selecting' | 'planned' | 'runni
 /** 进度来源：stream = 本页开着 SSE；poll = 本页是刷新后重进的，靠轮询锁文件；idle = 没在跑 */
 export type WizardMode = 'idle' | 'stream' | 'poll';
 
+/**
+ * 一条展示日志。id 是单调递增的稳定键：日志是「追加 + 超限从头部裁掉」的列表，
+ * 用数组下标当 key 的话，每次裁剪都会让所有行的 key 前移，Vue 要整段重渲；
+ * 稳定 id 让裁剪只影响真正新增/移除的那几行。
+ */
 interface LogLine {
+  id: number;
   level: 'info' | 'error';
   line: string;
 }
+
+/** 还没分配 id 的一条日志（logForEvent 的返回值，由调用方统一发号）。 */
+type LogPayload = Omit<LogLine, 'id'>;
+
+/** 日志 id 的发号器。模块级单例，跨 SSE 流与轮询恢复两条通道连续递增。 */
+let logSeq = 0;
 
 interface StatusPayload {
   locked: boolean;
   processAlive: boolean;
   initialized: boolean;
   manager: 'pnpm' | 'npm' | 'unknown';
-  lock: { stage?: string; error?: string | null; startedAt?: string } | null;
+  lock: { stage?: string; error?: string | null; startedAt?: string; logFile?: string | null; selection?: Record<string, unknown> } | null;
+  /** 引擎 --log-file 落盘的事件尾部（一行一条 JSON 事件）。CLI 直跑时为空数组 */
+  logLines?: string[];
   templateConfig: TemplateConfig | null;
   wizard: { total: number; present: number; missing: string[] };
   engine: { path: string; present: boolean };
@@ -61,11 +75,27 @@ const state = reactive({
   previewing: false,
   /** 当前阶段下标，-1 表示还没开始 */
   stageIndex: -1,
+  /** 引擎记录的开始时间（锁里的 startedAt）。用于进度页显示已运行时长。 */
+  startedAt: null as string | null,
   logs: [] as LogLine[],
   exitCode: null as number | null,
   error: '',
   remote: null as StatusPayload | null,
+  /**
+   * 轮询通道的瞬时失败标记。轮询每 2 秒打一次 /status，网络抖动、dev 服务
+   * 重启间隙都可能让某一次查询失败 —— 那不该被渲染成「初始化失败」：
+   * 下一轮大概率就自愈了。降级期间进度页亮一条 warn 提示，成功后自动消失。
+   * 主动查询（挂载、「查看最新状态」按钮）不走这条通道，失败照常上报。
+   */
+  pollDegraded: false,
 });
+
+/**
+ * 上一轮 /status 日志尾部的签名（行数 + 最后一行）。日志文件只追加，
+ * 签名不变就说明这 2 秒里什么都没发生 —— 此时跳过整段替换，省掉一次
+ * 最多 800 行的全量重渲（轮询是常态路径，绝大多数轮次都在这个快路径上）。
+ */
+let lastRemoteLogSig = '';
 
 let streamController: AbortController | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -257,9 +287,22 @@ export function useWizard() {
   const canStart = computed(() => state.status === 'selecting' || state.status === 'planned');
   const canPreview = computed(() => canStart.value && !state.previewing);
 
+  /**
+   * 完整分享链接：与 syncQuery 用同一份序列化，直接从当前选择生成 ——
+   * 不读地址栏，因为路由 replace 是异步的，「改完立刻点复制」可能拿上一帧的 URL。
+   * 同事打开这个链接，会得到与现在完全相同的选择。
+   */
+  const shareUrl = computed(() => {
+    if (!import.meta.client) return '';
+    const params = new URLSearchParams(queryFromSelection(state.selection));
+    return `${window.location.origin}/setup${params.toString() ? `?${params}` : ''}`;
+  });
+
   /** 某个分组里不可选的 value 集合，传给 OptionGroup 置灰卡片。 */
-  function blockedFor(key: string): Set<string> {
-    return blocked.value.get(key) ?? new Set<string>();
+  // 空集是绝大多数调用的结果：共用一个冻结的实例，省掉每次渲染每组一个新 Set。
+  const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+  function blockedFor(key: string): ReadonlySet<string> {
+    return blocked.value.get(key) ?? EMPTY_BLOCKED;
   }
 
   function recomputeConflicts(): void {
@@ -334,7 +377,7 @@ export function useWizard() {
   }
 
   function pushLog(level: LogLine['level'], line: string): void {
-    state.logs.push({ level, line });
+    state.logs.push({ id: ++logSeq, level, line });
     // 日志只用于展示，不参与判断；截断防止一个卡住的安装把内存吃光
     if (state.logs.length > 800) state.logs.splice(0, state.logs.length - 800);
   }
@@ -356,6 +399,56 @@ export function useWizard() {
     unloadHandler = null;
   }
 
+  /**
+   * 一条引擎事件对应的展示日志。exit 不产生日志行，返回 null。
+   *
+   * 为什么抽成纯函数：实时流（SSE）与刷新后的恢复（/status 返回的事件尾部）
+   * 吃的是**同一种事件**。两边各写一套格式化，迟早出现「实时看是一条样、
+   * 刷新后变了个样」—— 那会被当成新问题来排查。
+   * 返回值不带 id：由 pushLog / logsFromRemote 各自的发号器补上。
+   */
+  function logForEvent(event: Record<string, unknown>, raw: string): LogPayload | null {
+    switch (event.type) {
+      case 'stage':
+        return {
+          level: 'info',
+          line: `[${Number(event.index ?? 0) + 1}/${event.total ?? STAGES.length}] ${event.name ?? ''}`,
+        };
+      case 'log':
+        return { level: event.level === 'error' ? 'error' : 'info', line: String(event.line ?? '') };
+      case 'plan': {
+        const enginePlan = event.plan as InitPlan;
+        return {
+          level: 'info',
+          line: `引擎计划：删除 ${enginePlan?.deleteFiles?.length ?? 0} 个文件、安装 ${(enginePlan?.deps?.length ?? 0) + (enginePlan?.devDeps?.length ?? 0)} 个依赖`,
+        };
+      }
+      case 'error':
+        return { level: 'error', line: `${event.stage ?? ''} ${String(event.message ?? '未知错误')}`.trim() };
+      case 'exit':
+        return null;
+      default:
+        return { level: 'info', line: raw };
+    }
+  }
+
+  /** /status 返回的事件尾部 → 展示日志。解析失败的单行原样展示，不让一行坏数据炸掉整段。 */
+  function logsFromRemote(rawLines: string[]): LogLine[] {
+    const out: LogLine[] = [];
+    for (const raw of rawLines) {
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        out.push({ level: 'info', line: raw });
+        continue;
+      }
+      const line = logForEvent(event, raw);
+      if (line) out.push({ id: ++logSeq, ...line });
+    }
+    return out;
+  }
+
   function handleEvent(raw: string): void {
     let event: Record<string, unknown>;
     try {
@@ -365,43 +458,27 @@ export function useWizard() {
       return;
     }
 
-    switch (event.type) {
-      case 'stage': {
-        const index = Number(event.index ?? 0);
-        state.stageIndex = index;
-        pushLog('info', `[${index + 1}/${event.total ?? STAGES.length}] ${event.name ?? ''}`);
-        break;
+    if (event.type === 'stage') {
+      state.stageIndex = Number(event.index ?? 0);
+    } else if (event.type === 'plan') {
+      state.enginePlan = event.plan as InitPlan;
+      // 预览与执行必须一致。不一致时明确告警而不是静默 —— 那正是本方案最想避免的事。
+      const preview = state.plan?.deleteFiles.join('\n');
+      const actual = state.enginePlan?.deleteFiles?.join('\n');
+      if (preview && actual && preview !== actual) {
+        pushLog('error', '⚠ 引擎算出的删除清单与预览不一致，请把本页日志反馈给模板维护者');
       }
-      case 'log': {
-        pushLog(event.level === 'error' ? 'error' : 'info', String(event.line ?? ''));
-        break;
-      }
-      case 'plan': {
-        const enginePlan = event.plan as InitPlan;
-        state.enginePlan = enginePlan;
-        // 预览与执行必须一致。不一致时明确告警而不是静默 —— 那正是本方案最想避免的事。
-        const preview = state.plan?.deleteFiles.join('\n');
-        const actual = enginePlan?.deleteFiles?.join('\n');
-        if (preview && actual && preview !== actual) {
-          pushLog('error', '⚠ 引擎算出的删除清单与预览不一致，请把本页日志反馈给模板维护者');
-        }
-        pushLog('info', `引擎计划：删除 ${enginePlan?.deleteFiles?.length ?? 0} 个文件、安装 ${(enginePlan?.deps?.length ?? 0) + (enginePlan?.devDeps?.length ?? 0)} 个依赖`);
-        break;
-      }
-      case 'error': {
-        state.error = String(event.message ?? '未知错误');
-        pushLog('error', `${event.stage ?? ''} ${state.error}`.trim());
-        break;
-      }
-      case 'exit': {
-        const code = Number(event.code ?? -1);
-        state.exitCode = code;
-        state.status = code === 0 ? 'done' : 'failed';
-        break;
-      }
-      default:
-        pushLog('info', raw);
+    } else if (event.type === 'error') {
+      state.error = String(event.message ?? '未知错误');
+    } else if (event.type === 'exit') {
+      const code = Number(event.code ?? -1);
+      state.exitCode = code;
+      state.status = code === 0 ? 'done' : 'failed';
+      return;
     }
+
+    const line = logForEvent(event, raw);
+    if (line) pushLog(line.level, line.line);
   }
 
   /**
@@ -430,6 +507,27 @@ export function useWizard() {
     }
   }
 
+  /**
+   * 断流后的兜底：查一次锁文件，引擎还活着就降级成轮询，进度继续可见。
+   *
+   * 进度流可能被反向代理掐断、被电脑休眠打断、也可能被用户主动中断 ——
+   * 三者的共同点是「引擎多半还在跑」（客户端断开不杀引擎是刻意的）。
+   * 原先这里直接判 failed，把「看不到进度」当成「初始化失败」，用户最自然的
+   * 反应就是重试，而那正是残锁在场时最不该做的事。降级成已有的轮询通道，
+   * 页面表现与「刷新后重进」完全一致。
+   */
+  async function fallbackToPoll(reason: string): Promise<void> {
+    await refreshStatus();
+    if (state.remote?.locked && state.remote?.processAlive) {
+      state.status = 'running';
+      state.mode = 'poll';
+      startPolling();
+      pushLog('info', `${reason}，已自动切换为每 2 秒查询一次锁文件；引擎仍在后台执行，关闭页面也不会中断它。`);
+      return;
+    }
+    pushLog('info', `${reason}，且未检测到正在执行的初始化。`);
+  }
+
   /** 点「初始化项目」：起 SSE，进入 running。 */
   async function start(): Promise<void> {
     if (!canStart.value) return;
@@ -437,12 +535,16 @@ export function useWizard() {
     state.mode = 'stream';
     state.logs = [];
     state.stageIndex = -1;
+    state.startedAt = new Date().toISOString();
     state.exitCode = null;
     state.error = '';
     state.enginePlan = null;
+    state.pollDegraded = false;
+    lastRemoteLogSig = '';
     installUnloadGuard();
 
     streamController = new AbortController();
+    let connected = false;
     try {
       const res = await apiFetch('/init', {
         method: 'POST',
@@ -452,28 +554,47 @@ export function useWizard() {
       });
       if (!res.ok) throw new Error(await describeFailure(res));
       if (!res.body) throw new Error('响应没有 body，无法读取进度流');
+      connected = true;
 
       await readStream(res.body);
 
-      // 流读完了但没收到 exit：连接被中途掐断。
-      // 引擎仍在后台跑（这是有意的），所以要引导用户去看锁文件而不是重跑。
+      // 流读完了但没收到 exit：连接被中途掐断。先试降级成轮询，
+      // 只有连「正在执行的初始化」都查不到时才按失败处理。
       if (state.status === 'running') {
-        state.status = 'failed';
-        state.error = '进度流意外中断。初始化**可能仍在继续**，请先查看下方状态，不要直接重试。';
-        pushLog('error', state.error);
+        await fallbackToPoll('进度流意外中断');
+        if (state.status === 'running') {
+          state.status = 'failed';
+          state.error = '进度流意外中断，且未检测到正在执行的初始化。请用下方按钮查看最新状态。';
+          pushLog('error', state.error);
+        }
       }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
-        pushLog('error', '已按用户请求中断进度流。引擎进程可能仍在后台执行。');
-        return;
+        // 「中断进度流」也降级成轮询：用户要的是不再占着连接，不是从此看不到进度。
+        // 没查到在跑的初始化时保持 running（与旧版一致）—— 用户主动断开，
+        // 不该把「我看不到」渲染成「初始化失败了」。
+        await fallbackToPoll('已按用户请求中断进度流');
+      } else if (connected) {
+        // 流读到一半网络异常：引擎大概率还在跑，降级成轮询；
+        // 确认没在跑了才按失败处理。
+        await fallbackToPoll('与初始化接口的连接中断');
+        if (state.status === 'running') {
+          state.status = 'failed';
+          state.error = (err as Error).message;
+          pushLog('error', state.error);
+        }
+      } else {
+        // 请求本身没建立（403 / 409 / 422…）：失败信息已由 describeFailure 给出，
+        // 不做降级 —— 那会用一份「其实没在跑的初始化」盖掉真正的拒绝原因。
+        state.error = (err as Error).message;
+        state.status = 'failed';
+        pushLog('error', state.error);
       }
-      state.error = (err as Error).message;
-      state.status = 'failed';
-      pushLog('error', state.error);
     } finally {
       removeUnloadGuard();
       streamController = null;
-      state.mode = 'idle';
+      // 降级成轮询时把 mode 留给轮询通道，只有真正收场时才回 idle
+      if (state.mode !== 'poll') state.mode = 'idle';
     }
   }
 
@@ -483,24 +604,51 @@ export function useWizard() {
     streamController = null;
   }
 
-  /** 读一次状态接口。刷新后重进靠它恢复「现在到底在干什么」。 */
-  async function refreshStatus(): Promise<void> {
+  /**
+   * 读一次状态接口。刷新后重进靠它恢复「现在到底在干什么」。
+   *
+   * fromPoll 为 true 表示这次调用由轮询定时器发起 —— 它的失败处理走单独一条路：
+   * 瞬时失败（网络抖动、服务重启间隙）只亮 pollDegraded 提示，下一轮自动重试，
+   * **不**覆盖 state.error。原因：state.error 是失败横幅，写进去之后没有任何
+   * 成功路径会清掉它 —— 一次 2 秒一次的偶发失败就能把横幅钉死在页面上，
+   * 而用户看到的「初始化失败」与引擎实际状态毫无关系。
+   */
+  async function refreshStatus(fromPoll = false): Promise<void> {
     try {
       const res = await apiFetch('/status');
       if (!res.ok) throw new Error(await describeFailure(res));
       const payload = (await res.json()) as StatusPayload;
       state.remote = payload;
+      if (state.pollDegraded) state.pollDegraded = false;
+
+      // 轮询通道的日志：整段替换而不是增量合并 —— 日志文件只追加，
+      // 尾部天然覆盖上一轮读到的内容；实时流在场时不动它（两条时序独立，别互相踩）。
+      // 签名（行数 + 最后一行）没变就整段跳过：轮询大多数轮次日志都不会变。
+      if (state.mode !== 'stream' && payload.logLines?.length) {
+        const sig = `${payload.logLines.length}:${payload.logLines[payload.logLines.length - 1] ?? ''}`;
+        if (sig !== lastRemoteLogSig) {
+          lastRemoteLogSig = sig;
+          state.logs = logsFromRemote(payload.logLines);
+        }
+      }
 
       if (payload.locked) {
         const stage = payload.lock?.stage ?? '';
         const index = STAGES.findIndex((s) => s.key === stage);
         state.stageIndex = index;
+        state.startedAt = payload.lock?.startedAt ?? state.startedAt;
         if (payload.processAlive) {
-          if (state.mode !== 'stream') state.mode = 'poll';
-          state.status = 'running';
+          // 轮询的开关随状态查询本身走：谁发现「引擎活着而本页没有实时流」，
+          // 谁就接管轮询 —— 断流降级、刷新重进、「查看最新状态」按钮共用这一条路。
+          if (state.mode !== 'stream') {
+            state.mode = 'poll';
+            state.status = 'running';
+            startPolling();
+          }
         } else {
           state.status = 'failed';
           state.mode = 'idle';
+          stopPolling();
           state.error = payload.lock?.error ?? '上一次初始化没有正常结束（进程已退出但锁未清理）。';
         }
         return;
@@ -509,6 +657,7 @@ export function useWizard() {
       if (payload.initialized) {
         state.status = 'done';
         state.mode = 'idle';
+        stopPolling();
       } else if (state.mode !== 'stream' && (state.status === 'running' || state.status === 'failed')) {
         // 「本页没有连着进度流」才允许把 running / failed 打回 selecting。
         //
@@ -518,8 +667,14 @@ export function useWizard() {
         // 引擎清掉锁的瞬间同理：`exit` 事件才是终局判据，不能由一次轮询抢先下结论。
         state.mode = 'idle';
         state.status = 'selecting';
+        stopPolling();
       }
     } catch (err) {
+      if (fromPoll && state.mode === 'poll' && state.status === 'running') {
+        // 轮询中的瞬时失败：标记降级、不写 error 横幅，等下一轮自愈。
+        state.pollDegraded = true;
+        return;
+      }
       state.error = (err as Error).message;
     }
   }
@@ -527,9 +682,7 @@ export function useWizard() {
   function startPolling(): void {
     if (pollTimer) return;
     pollTimer = setInterval(() => {
-      void refreshStatus().then(() => {
-        if (!state.remote?.locked) stopPolling();
-      });
+      void refreshStatus(true);
     }, POLL_INTERVAL_MS);
   }
 
@@ -543,7 +696,6 @@ export function useWizard() {
   async function attach(): Promise<void> {
     if (!state.schema) await load();
     await refreshStatus();
-    if (state.status === 'running' && state.mode === 'poll') startPolling();
   }
 
   /** 从头再来（失败后重试走这里，先清掉本地残留的错误态） */
@@ -552,6 +704,8 @@ export function useWizard() {
     state.error = '';
     state.exitCode = null;
     state.stageIndex = -1;
+    state.startedAt = null;
+    state.pollDegraded = false;
     state.status = state.schema ? 'selecting' : 'idle';
     state.mode = 'idle';
   }
@@ -572,6 +726,7 @@ export function useWizard() {
     infoConflicts,
     canStart,
     canPreview,
+    shareUrl,
     // 动作
     load,
     attach,

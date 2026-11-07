@@ -197,6 +197,7 @@ function simulateInstalled(dir) {
     hasAll(text, [
       '--selection', '--template-config', '--dry-run', '--check', '--rollback',
       '--save-plan', '--json-lines', '--skip-install', '--force-experimental', '--fast', '--root',
+      '--log-file',
     ], '--help 输出');
   });
 
@@ -656,6 +657,62 @@ function simulateInstalled(dir) {
     const tokenPaths = /WIZARD_PATHS = new Set\(\[([^\]]*)\]\)/.exec(tokenPlugin)?.[1] ?? '';
     assert(tokenPaths !== '', '找不到令牌注入的路径白名单（变量被改名了？）');
     includes(tokenPaths, "'/setup/progress'", '令牌注入的路径白名单要含进度页');
+  });
+
+  g.check('A14 --log-file：事件逐行落盘且可解析；--dry-run 一个文件都不写', async () => {
+    const dir = freshRepo('a14-log-file');
+    const logFile = join(RUN_DIR, 'a14-events.jsonl');
+
+    // --dry-run 的承诺是「不写任何文件」，日志文件不许是例外 ——
+    // 这条承诺丢了，用户就不敢拿 dry-run 试东西。
+    const dry = await initRepo(dir, {}, ['--dry-run', '--log-file', logFile]);
+    eq(dry.code, 0, 'dry-run 退出码');
+    assert(!existsSync(logFile), '--dry-run 不许写日志文件');
+
+    const { code } = await initRepo(dir, {}, ['--log-file', logFile]);
+    eq(code, 0, '初始化退出码');
+    assert(existsSync(logFile), '真正执行时应写出日志文件');
+    // 成功后锁已删干净 —— 日志文件记录的是一次完整的执行
+    assert(!existsSync(join(dir, engineInternals.LOCK_FILE)), '成功后锁应当已删');
+
+    const events = readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert(events.length > 0, '日志文件应有事件');
+    eq(events[0].type, 'stage', '第一行应是 stage 事件');
+    eq(events[events.length - 1].type, 'exit', '最后一行应是 exit 事件');
+    hasAll(events.map((e) => e.type), ['stage', 'plan', 'log', 'exit'], '关键事件都在日志里');
+  });
+
+  g.check('A15 --log-file：失败保留的锁里记着日志路径，startedAt 不随阶段重写', async () => {
+    const dir = freshRepo('a15-log-lock');
+    const logFile = join(RUN_DIR, 'a15-events.jsonl');
+    // 拿掉 nuxt.config.ts → 改写阶段失败 → 引擎按约定**保留锁**并写入失败原因。
+    // 这正是「刷新后能不能找回现场」要依赖的那把锁。
+    unlinkSync(join(dir, 'nuxt.config.ts'));
+    const { code } = await initRepo(dir, {}, ['--log-file', logFile]);
+    eq(code, 1, '改写失败的退出码');
+    assert(existsSync(join(dir, engineInternals.LOCK_FILE)), '失败时锁必须保留');
+
+    const lock = JSON.parse(readText(dir, engineInternals.LOCK_FILE));
+    eq(lock.logFile, resolve(logFile), '锁里应记录日志文件的绝对路径');
+    assert(typeof lock.startedAt === 'string' && lock.startedAt.length > 0, '锁里应有开始时间');
+    assert(typeof lock.error === 'string' && lock.error.length > 0, '锁里应有失败原因');
+
+    const events = readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert(events.some((e) => e.type === 'error'), '日志里应有 error 事件');
+    eq(events[events.length - 1].type, 'exit', '失败路径最后一行也是 exit');
+  });
+
+  g.check('A16 --log-file 只在执行时有效：--check / --rollback 拒绝', async () => {
+    for (const flag of ['--check', '--rollback']) {
+      let threw = false;
+      try {
+        engineParseArgs([flag, '--log-file', 'x.jsonl']);
+      } catch {
+        threw = true;
+      }
+      assert(threw, `${flag} 与 --log-file 应当被拒绝：只读操作不许写任何文件`);
+      eq(await engineCli([flag, '--log-file', 'x.jsonl']), 2, `${flag} 的 CLI 退出码`);
+    }
   });
 }
 

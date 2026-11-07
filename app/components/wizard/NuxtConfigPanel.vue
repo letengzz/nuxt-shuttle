@@ -26,7 +26,7 @@ import OptionGroup from '~/components/wizard/OptionGroup.vue';
 defineProps<{
   groups: OptionGroupSpec[];
   modelValue: Selection;
-  blockedFor: (key: string) => Set<string>;
+  blockedFor: (key: string) => ReadonlySet<string>;
 }>();
 
 const emit = defineEmits<{ 'update:modelValue': [Selection] }>();

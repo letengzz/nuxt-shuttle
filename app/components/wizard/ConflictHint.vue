@@ -21,7 +21,10 @@ const LABEL: Record<RuleLevel, string> = {
 </script>
 
 <template>
-  <div v-if="conflicts.length" class="hint-list">
+  <!-- role="status" + polite：选中项一变这里的提示就重排，其中 block 级提示
+       直接决定主按钮能不能点 —— 让辅助技术主动收到通知，而不是要求用户
+       碰巧把焦点挪到这一区。 -->
+  <div v-if="conflicts.length" class="hint-list" role="status" aria-live="polite">
     <div v-for="(conflict, index) in conflicts" :key="`${conflict.rule ?? index}`" class="hint" :class="`hint--${conflict.level}`">
       <strong>{{ LABEL[conflict.level] }}：</strong>{{ conflict.message }}
     </div>

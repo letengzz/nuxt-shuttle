@@ -75,6 +75,9 @@ function onRetry(): void {
           :logs="state.logs"
           :error="state.error"
           :engine-plan="state.enginePlan"
+          :started-at="state.startedAt"
+          :schema="state.schema"
+          :poll-degraded="state.pollDegraded"
           :remote="state.remote"
         />
       </div>

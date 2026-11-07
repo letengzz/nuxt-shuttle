@@ -14,7 +14,14 @@
  *
  * 用原生 <dialog> + showModal()：焦点陷阱、Esc 关闭、遮罩层、背景惰性化
  * 都是浏览器给的，而引导期是零依赖的（dependencies 里只有 nuxt），不能引组件库。
+ *
+ * 安装命令不从本地拼字符串，而是直接用 shared/wizard/plan.mjs 的 installCommands ——
+ * 引擎 install 阶段执行的就是这同一个函数的产物。「预览即承诺」如果只算到
+ * 依赖清单为止，用户看到的命令与实际跑的仍可能各说各话；让弹窗把命令原样亮出来，
+ * 想核对的人不必等到执行那一刻。shared 层是引擎与服务端共用的算法本体
+ * （KEEP_FILES 在册），前端 import 它不会在初始化后留下断掉的引用。
  */
+import { installCommands } from '#shared/wizard/plan.mjs';
 import type { InitPlan, Selection, WizardSchema } from '~/utils/wizard/option-model';
 
 const props = defineProps<{
@@ -102,6 +109,9 @@ const note = computed(() => {
   const { deps, devDeps, deleteFiles, generatedFiles } = plan;
   return `运行时 ${deps.length} + 开发 ${devDeps.length} 个依赖 · 删除 ${deleteFiles.length} 个文件 · 生成 ${generatedFiles.length} 个文件`;
 });
+
+/** 将执行的安装命令 —— 与引擎 install 阶段同一个函数算出来，逐字一致。 */
+const installCommandList = computed(() => (props.plan ? installCommands(props.plan) : []));
 </script>
 
 <template>
@@ -175,6 +185,18 @@ const note = computed(() => {
             <ol class="preview__list">
               <li v-for="entry in plan.cssEntries" :key="entry">{{ entry }}</li>
             </ol>
+          </div>
+
+          <!-- 安装命令：与引擎执行的同源同函数。列出来是给「想在跑之前核对到底会
+               执行什么」的人看的，也是 --skip-install 之后照着补装的那一份。 -->
+          <div>
+            <h3>将执行的安装命令（按顺序）</h3>
+            <ul v-if="installCommandList.length" class="preview__list">
+              <li v-for="command in installCommandList" :key="command"><code>{{ command }}</code></li>
+            </ul>
+            <p v-else class="preview__empty">
+              本次选择不新增依赖，不会执行任何安装命令。
+            </p>
           </div>
 
           <!-- 将写入的配置区间：原先挂在右栏底部，与依赖清单同源（都是计划的产物），
