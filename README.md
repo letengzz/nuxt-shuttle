@@ -41,6 +41,8 @@ pnpm dev
 node scripts/init.mjs --selection ./my-selection.json --dry-run
 ```
 
+选择页底部的「导出选择文件」下载的正是这份 `selection.json`，「导入选择文件」可以把它读回来（按当前候选清单校验并归一化）；进度页的「复制日志 / 下载日志」导出的是页面展示层日志，可直接贴进 issue。全文日志按执行摘要里的「日志文件」路径找。
+
 ## 引导期目录
 
 ```text

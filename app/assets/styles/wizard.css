@@ -687,6 +687,8 @@ html:has(dialog[open]) {
 .log-tools {
   display: flex;
   justify-content: flex-end;
+  /* 「复制日志」与「下载日志」并排时留一口气；只有一个按钮时无影响。 */
+  gap: var(--sp-2);
   margin-bottom: var(--sp-2);
 }
 

@@ -18,7 +18,16 @@
  *    代价是要自己处理「一个事件可能被 TCP 分片切断」，见 readStream()。
  */
 import { computed, reactive } from 'vue';
-import type { Conflict, InitPlan, Rule, Selection, TemplateConfig, WizardSchema } from '~/utils/wizard/option-model';
+import { assertShape, normalizeSelection } from '#shared/wizard/plan.mjs';
+import type {
+  Conflict,
+  InitPlan,
+  OptionGroup,
+  Rule,
+  Selection,
+  TemplateConfig,
+  WizardSchema,
+} from '~/utils/wizard/option-model';
 import { STAGES } from '~/utils/wizard/option-model';
 
 export type WizardStatus = 'idle' | 'loading' | 'selecting' | 'planned' | 'running' | 'done' | 'failed';
@@ -58,6 +67,12 @@ interface StatusPayload {
 
 const STORAGE_KEY = 'nuxt-shuttle:wizard-selection';
 const POLL_INTERVAL_MS = 2000;
+/**
+ * 一次 /status 查询最多等多久。dev 服务卡住时轮询会每 2 秒再发一个请求，
+ * 没有上限的话这些请求会一直挂着、越积越多；超时后由 pollDegraded 自愈。
+ * 只给**短只读请求**用，/init 的 SSE 长连接（可能跑 30 分钟）不套这个限制。
+ */
+const STATUS_TIMEOUT_MS = 10_000;
 
 const state = reactive({
   status: 'idle' as WizardStatus,
@@ -96,6 +111,17 @@ const state = reactive({
  * 最多 800 行的全量重渲（轮询是常态路径，绝大多数轮次都在这个快路径上）。
  */
 let lastRemoteLogSig = '';
+
+/**
+ * /status 展示字段的签名。一次轮询拿到「内容完全没变」的新对象时，直接赋给
+ * state.remote 也会让进度面板（步骤条、选择快照、执行摘要、日志区）整块重渲，
+ * 而初始化动辄十几分钟、绝大多数轮次什么都没变。签名相同就留着旧对象。
+ * logLines 单独由 lastRemoteLogSig 判增量，所以这里只比较它的长度与最后一行。
+ */
+let lastRemoteSig = '';
+
+/** 在途的 /status 查询数。轮询用它做「单飞」，见 refreshStatus。 */
+let statusInFlight = 0;
 
 let streamController: AbortController | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -263,7 +289,23 @@ function storeSelection(selection: Selection): void {
   }
 }
 
-/** 优先级：URL query > localStorage > options.json 的默认值 */
+/**
+ * URL query 与 localStorage 都是**不可信输入**：手改过的链接、上一个模板版本
+ * 存下的选择、被别的脚本写脏的值，都可能落进来。此前它们被原样塞进 selection，
+ * 页面照常渲染，直到点「预览变更」才被服务端 400 打回来，而且看不出是哪一项坏的。
+ * 现在先按当前 schema 的候选集过一遍：非法就当没这一项，回落到默认值。
+ *
+ * 多选组也接受单个字符串（URL 里 `?features=a` 不带逗号时就是这种形态），
+ * 保持既有行为不变；单选组收到数组则判非法。
+ */
+function acceptableValue(group: OptionGroup, value: unknown): boolean {
+  if (!group.multiple && Array.isArray(value)) return false;
+  const allowed = new Set(group.options.map((option) => option.value));
+  const values = Array.isArray(value) ? value : [value];
+  return values.every((item) => typeof item === 'string' && allowed.has(item));
+}
+
+/** 优先级：URL query > localStorage > options.json 的默认值（每一级都要合法） */
 function composeSelection(schema: WizardSchema, query: Selection): Selection {
   const stored = readStoredSelection() ?? {};
   const out: Selection = {};
@@ -271,8 +313,8 @@ function composeSelection(schema: WizardSchema, query: Selection): Selection {
     const fromQuery = query[group.key];
     const fromStore = stored[group.key];
     const fallback = group.default;
-    if (fromQuery !== undefined) out[group.key] = fromQuery;
-    else if (fromStore !== undefined) out[group.key] = fromStore;
+    if (acceptableValue(group, fromQuery)) out[group.key] = fromQuery as Selection[string];
+    else if (acceptableValue(group, fromStore)) out[group.key] = fromStore as Selection[string];
     else out[group.key] = Array.isArray(fallback) ? [...fallback] : fallback;
   }
   return out;
@@ -331,6 +373,9 @@ export function useWizard() {
     if (state.schema || state.status === 'loading') return;
     state.status = 'loading';
     state.message = '正在读取候选清单…';
+    // 重新加载要把上一轮的失败原因清掉：成功路径原本从来不清 state.error，
+    // 于是「清单读取失败 → 点重试 → 成功」之后那条红色横幅会永远留在页面上。
+    state.error = '';
     try {
       const res = await apiFetch('/schema');
       if (!res.ok) throw new Error(await describeFailure(res));
@@ -382,6 +427,30 @@ export function useWizard() {
     } finally {
       state.previewing = false;
     }
+  }
+
+  /**
+   * 导入此前导出的 selection.json —— 与选择页的「导出选择文件」形成闭环。
+   *
+   * 校验与归一化都用 shared 层的同一对函数（服务端 /plan、引擎 CLI 也用它们）：
+   * 未知分组、非法值、形状不对一律拒绝，绝不把文件里的任意字段写进状态。
+   * 因此不需要新接口、不改引擎输入格式，也不碰五道闸中的任何一条。
+   * 导入后丢掉旧计划并退回 selecting —— 那份计划对应的是**导入前**的选择，
+   * 留着它等于让「预览即承诺」说谎。
+   */
+  function importSelection(raw: unknown): { ok: boolean; message: string } {
+    if (!state.schema) return { ok: false, message: '候选清单尚未加载，请稍后重试' };
+    if (!canStart.value) return { ok: false, message: '当前状态下不能修改选择' };
+    try {
+      assertShape(state.schema, raw);
+    } catch (err) {
+      return { ok: false, message: `选择文件不合法：${(err as Error).message}` };
+    }
+    const normalized = normalizeSelection(state.schema, raw) as Selection;
+    state.plan = null;
+    state.error = '';
+    updateSelection(normalized);
+    return { ok: true, message: `已导入 ${Object.keys(normalized).length} 项选择，请点「预览变更」核对计划` };
   }
 
   function pushLog(level: LogLine['level'], line: string): void {
@@ -555,6 +624,7 @@ export function useWizard() {
     state.enginePlan = null;
     state.pollDegraded = false;
     lastRemoteLogSig = '';
+    lastRemoteSig = '';
     installUnloadGuard();
 
     streamController = new AbortController();
@@ -634,21 +704,53 @@ export function useWizard() {
    * 而用户看到的「初始化失败」与引擎实际状态毫无关系。
    */
   async function refreshStatus(fromPoll = false): Promise<void> {
+    // 单飞：上一轮还没回来就跳过这一轮轮询。dev 服务卡住时 2 秒一个请求会无限堆积，
+    // 多个响应乱序回来还会互相覆盖状态。手动查询（挂载、按钮）不受这条限制 ——
+    // 用户点了就该真的查一次；它们只是共享同一个在途计数。
+    if (fromPoll && statusInFlight > 0) return;
+    statusInFlight += 1;
     try {
-      const res = await apiFetch('/status');
+      await queryStatus(fromPoll);
+    } finally {
+      statusInFlight -= 1;
+    }
+  }
+
+  /** 真正的一次查询。只由 refreshStatus 调用，别绕开它的在途计数。 */
+  async function queryStatus(fromPoll: boolean): Promise<void> {
+    try {
+      const res = await apiFetch('/status', {
+        // 只给这次短查询设上限；/init 的 SSE 长连接自带 signal，不走这里。
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(STATUS_TIMEOUT_MS)
+          : undefined,
+      });
       if (!res.ok) throw new Error(await describeFailure(res));
       const payload = (await res.json()) as StatusPayload;
-      state.remote = payload;
+
+      // 展示字段没变就别换 state.remote：赋一个新对象会让整个进度面板重渲，
+      // 而初始化动辄十几分钟、绝大多数轮询什么都没变。日志通道另用自己的签名
+      // （见 lastRemoteLogSig），所以这里只把日志的行数与最后一行算进比较。
+      const { logLines, ...snapshot } = payload;
+      const signature = JSON.stringify([
+        snapshot,
+        logLines?.length ?? 0,
+        logLines?.[logLines.length - 1] ?? '',
+      ]);
+      if (signature !== lastRemoteSig) {
+        lastRemoteSig = signature;
+        state.remote = payload;
+      }
       if (state.pollDegraded) state.pollDegraded = false;
 
       // 轮询通道的日志：整段替换而不是增量合并 —— 日志文件只追加，
       // 尾部天然覆盖上一轮读到的内容；实时流在场时不动它（两条时序独立，别互相踩）。
       // 签名（行数 + 最后一行）没变就整段跳过：轮询大多数轮次日志都不会变。
-      if (state.mode !== 'stream' && payload.logLines?.length) {
-        const sig = `${payload.logLines.length}:${payload.logLines[payload.logLines.length - 1] ?? ''}`;
+      if (state.mode !== 'stream' && logLines?.length) {
+        const sig = `${logLines.length}:${logLines[logLines.length - 1] ?? ''}`;
         if (sig !== lastRemoteLogSig) {
           lastRemoteLogSig = sig;
-          state.logs = logsFromRemote(payload.logLines);
+          state.logs = logsFromRemote(logLines);
         }
       }
 
@@ -702,7 +804,9 @@ export function useWizard() {
         state.pollDegraded = true;
         return;
       }
-      state.error = (err as Error).message;
+      state.error = (err as Error).name === 'TimeoutError'
+        ? `状态查询超时（${STATUS_TIMEOUT_MS / 1000} 秒无响应）：请确认 pnpm dev 仍在运行，再点「查看最新状态」`
+        : (err as Error).message;
     }
   }
 
@@ -771,6 +875,9 @@ export function useWizard() {
     state.stageIndex = -1;
     state.startedAt = null;
     state.pollDegraded = false;
+    // 新一轮初始化不该沿用上一轮的状态/日志签名，否则首轮查询会被误判成「没变化」。
+    lastRemoteLogSig = '';
+    lastRemoteSig = '';
     state.status = state.schema ? 'selecting' : 'idle';
     state.mode = 'idle';
   }
@@ -797,6 +904,7 @@ export function useWizard() {
     attach,
     updateSelection,
     preview,
+    importSelection,
     start,
     detach,
     refreshStatus,

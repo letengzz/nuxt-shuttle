@@ -150,10 +150,12 @@ const selectionSummary = computed(() => {
 const copyState = ref<'idle' | 'copied' | 'failed'>('idle');
 let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** 「复制」与「下载」共用同一份展示层文本，避免两处拼接日后各说各话。 */
+const logText = computed(() => props.logs.map((entry) => entry.line).join('\n'));
+
 async function copyLogs(): Promise<void> {
-  const text = props.logs.map((entry) => entry.line).join('\n');
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(logText.value);
     copyState.value = 'copied';
   } catch {
     copyState.value = 'failed';
@@ -163,6 +165,20 @@ async function copyLogs(): Promise<void> {
     copyState.value = 'idle';
     copyTimer = null;
   }, 2500);
+}
+
+/**
+ * 下载日志：剪贴板权限被拒、或日志长到不适合粘贴时，直接存成 .log 贴 issue。
+ * 与「复制日志」同源（展示层已翻译成可读行），不读引擎的完整日志文件 ——
+ * 用户看到什么就拿到什么，不必解释 JSON 事件怎么读。
+ */
+function downloadLogs(): void {
+  const url = URL.createObjectURL(new Blob([logText.value], { type: 'text/plain;charset=utf-8' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `nuxt-shuttle-init-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.log`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 onUnmounted(() => {
@@ -242,6 +258,14 @@ onUnmounted(() => {
           @click="copyLogs()"
         >
           {{ copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败，请手动选中日志区复制' : '复制日志' }}
+        </button>
+        <button
+          type="button"
+          :disabled="!logs.length"
+          title="把当前展示的日志存成 .log 文件；页面日志最多保留 800 行，全文见执行摘要里的「日志文件」"
+          @click="downloadLogs()"
+        >
+          下载日志
         </button>
       </div>
 

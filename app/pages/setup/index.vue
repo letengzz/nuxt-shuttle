@@ -80,6 +80,23 @@ const previewOpen = ref(false);
 const shareState = ref<'idle' | 'copied' | 'failed'>('idle');
 let shareTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** 导入反馈：成功/失败都只亮几秒，不变成一条永久横幅。 */
+const importState = ref<'idle' | 'ok' | 'failed'>('idle');
+const importMessage = ref('');
+let importTimer: ReturnType<typeof setTimeout> | null = null;
+const fileInput = ref<HTMLInputElement | null>(null);
+
+function showImportResult(ok: boolean, message: string): void {
+  importState.value = ok ? 'ok' : 'failed';
+  importMessage.value = message;
+  if (importTimer) clearTimeout(importTimer);
+  importTimer = setTimeout(() => {
+    importState.value = 'idle';
+    importMessage.value = '';
+    importTimer = null;
+  }, 4000);
+}
+
 async function copyShareLink(): Promise<void> {
   try {
     await navigator.clipboard.writeText(wizard.shareUrl.value);
@@ -97,6 +114,7 @@ async function copyShareLink(): Promise<void> {
 
 onBeforeUnmount(() => {
   if (shareTimer) clearTimeout(shareTimer);
+  if (importTimer) clearTimeout(importTimer);
 });
 
 /** 清单加载失败后的重试入口（用具名函数而不是内联 wizard.load()，职责更清楚） */
@@ -121,6 +139,39 @@ function exportSelection(): void {
   anchor.download = 'selection.json';
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * 读回导出的 selection.json。
+ *
+ * 真正的选择校验在 useWizard.importSelection 里（与服务端 /plan、引擎 CLI
+ * 共用 shared 层的 assertShape / normalizeSelection）；这里只负责浏览器侧：
+ * 限大小、解析 JSON、把结果讲清楚。读完立刻清 input.value，
+ * 否则同一个文件再选一次不会触发 change 事件。
+ */
+async function onSelectionFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (file.size > 64 * 1024) {
+    showImportResult(false, '选择文件超过 64 KB，请确认选的是导出的 selection.json');
+    return;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch {
+    showImportResult(false, '选择文件不是合法 JSON');
+    return;
+  }
+  const result = wizard.importSelection(raw);
+  showImportResult(result.ok, result.message);
+}
+
+/** 按钮是隐藏文件选择器的唯一入口：不把 <input type="file"> 直接暴露在操作条里。 */
+function pickSelectionFile(): void {
+  fileInput.value?.click();
 }
 
 function onUpdate(next: Selection): void {
@@ -212,9 +263,22 @@ async function onInit(): Promise<void> {
       <!-- 进度**不在这里**渲染：点下确认之后整页交给 /setup/progress。
            一个正在删文件、装依赖的初始化，值得一整屏；把它塞在选项下方，
            等于让人在「刚改过的表单项」和「正在跑的进度」之间分走注意力。 -->
-      <div v-if="state.error" class="wizard__full">
+      <!-- 骨架态的错误已经在上面那块里显示过了：这里再加 v-if="state.error" 会渲染两遍。 -->
+      <div v-if="state.error && !loading" class="wizard__full">
         <div class="hint hint--block">
           {{ state.error }}
+        </div>
+      </div>
+
+      <!-- 导入反馈：不写进 state.error（那会同时点亮「初始化失败」的语义），
+           用一条会自动消失的独立提示，role=status 让读屏用户也听得到。 -->
+      <div v-if="importMessage" class="wizard__full">
+        <div
+          class="hint"
+          :class="importState === 'failed' ? 'hint--block' : 'hint--info'"
+          role="status"
+        >
+          {{ importMessage }}
         </div>
       </div>
     </div>
@@ -253,6 +317,22 @@ async function onInit(): Promise<void> {
           @click="exportSelection()"
         >
           导出选择文件
+        </button>
+        <!-- 文件选择器本身隐藏，按钮是唯一入口：键盘与读屏用户看到的是一个有名字的按钮。 -->
+        <input
+          ref="fileInput"
+          type="file"
+          accept="application/json,.json"
+          hidden
+          @change="onSelectionFile"
+        >
+        <button
+          type="button"
+          :disabled="!state.schema"
+          title="读回此前导出的 selection.json；会按当前候选清单校验并归一化"
+          @click="pickSelectionFile()"
+        >
+          导入选择文件
         </button>
         <button
           type="button"

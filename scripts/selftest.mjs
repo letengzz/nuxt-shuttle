@@ -28,7 +28,18 @@
  *
  * 退出码：0 全绿 / 1 有失败 / 2 参数错误
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -764,6 +775,114 @@ function simulateInstalled(dir) {
       const handler = readFileSync(join(TEMPLATE_ROOT, file), 'utf8');
       assert(/'cache-control',\s*'no-store'/.test(handler), `${name} 接口必须声明 no-store`);
     }
+  });
+
+  g.check('A18 第四轮：导入闭环、轮询单飞、状态签名与有界日志尾部', async () => {
+    const composable = readFileSync(join(TEMPLATE_ROOT, 'app/utils/wizard/useWizard.ts'), 'utf8');
+    const setup = readFileSync(join(TEMPLATE_ROOT, 'app/pages/setup/index.vue'), 'utf8');
+    const panel = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/ProgressStream.vue'), 'utf8');
+    const status = readFileSync(join(TEMPLATE_ROOT, 'server/api/wizard/status.get.ts'), 'utf8');
+
+    // ① 导入闭环：形状校验与归一化必须来自 shared（与 /plan、引擎同源），不能自己猜。
+    assert(
+      /import \{[^}]*assertShape[^}]*\} from '#shared\/wizard\/plan\.mjs'/.test(composable),
+      'useWizard 必须复用 shared 的 assertShape 做导入校验',
+    );
+    assert(
+      /function importSelection\([\s\S]{0,1500}?assertShape\(state\.schema, raw\)[\s\S]{0,700}?normalizeSelection\(state\.schema, raw\)/.test(composable),
+      '导入必须「先按当前 schema 校验、再归一化」',
+    );
+    assert(
+      /function importSelection\([\s\S]{0,1800}?state\.plan = null;/.test(composable),
+      '导入后必须丢掉旧计划（否则「预览即承诺」说谎）',
+    );
+    includes(setup, '导入选择文件', '选择页要有导入按钮');
+    assert(/<input\s[^>]*type="file"[^>]*hidden/.test(setup), '文件选择器要隐藏，按钮是唯一入口');
+    includes(setup, 'pickSelectionFile()', '导入按钮必须接到文件选择器');
+
+    // ② 清单加载失败时错误只渲染一遍，重试成功后不留旧横幅。
+    assert(/v-if="state\.error && !loading"/.test(setup), '骨架态已显示错误，页面级横幅必须排除 loading');
+    assert(
+      /function load\(\): Promise<void> \{[\s\S]{0,600}?state\.error = '';/.test(composable),
+      'load 重试要清掉上一轮的失败原因',
+    );
+
+    // ③ URL / localStorage 的脏值不能流进选择。
+    assert(
+      /function acceptableValue[\s\S]{0,700}?allowed\.has\(/.test(composable),
+      'URL / localStorage 的值必须按当前候选集校验',
+    );
+    assert(
+      /function composeSelection[\s\S]{0,800}?acceptableValue\(group, fromQuery\)[\s\S]{0,300}?acceptableValue\(group, fromStore\)/.test(composable),
+      'query 与 stored 两级都要过滤',
+    );
+
+    // ④ 轮询单飞 + 超时 + 状态未变不重渲。
+    assert(/if \(fromPoll && statusInFlight > 0\) return;/.test(composable), '轮询必须单飞');
+    assert(/statusInFlight \+= 1;[\s\S]{0,400}?statusInFlight -= 1;/.test(composable), '在途计数必须配对');
+    assert(/AbortSignal\.timeout\(STATUS_TIMEOUT_MS\)/.test(composable), '短查询必须有超时');
+    assert(
+      /function queryStatus[\s\S]{0,2500}?signature !== lastRemoteSig/.test(composable),
+      '状态未变时不许替换 state.remote',
+    );
+    includes(composable, 'TimeoutError', '超时要有可操作的文案');
+
+    // ⑤ 下载日志与复制日志共用同一份展示层文本。
+    assert(/logText = computed/.test(panel) && /downloadLogs\(\)/.test(panel), '进度面板要提供下载日志');
+    includes(panel, '下载日志', '下载日志按钮');
+    assert(/copyLogs[\s\S]{0,300}?logText\.value/.test(panel), '复制与下载必须同源');
+
+    // ⑥ 有界尾部读取：结构钉住 + 与全量读的输出逐一比对。
+    //
+    // 为什么动态执行源码而不是复制一份实现来测：复制出来的那份再绿也证明不了
+    // 接口里跑的函数是对的。这里把 status.get.ts 里 readLogTail 的**函数体**
+    // 接上真实的 fs 依赖执行，测的就是真正上线的那段代码；函数体保持无类型标注
+    // 的纯 JS 就是为了让它能被这样直接执行（也避免为了可测性往产物多留一个文件）。
+    const tail = /function readLogTail\(lock: WizardLock \| null\): string\[\] \{([\s\S]*?)\n\}\n\nexport default/.exec(status);
+    assert(tail, 'status.get.ts 里找不到 readLogTail 的函数体（结构变了请同步本断言）');
+    assert(/fstatSync\(fd\)\.size/.test(status) && /readSync\(fd, buffer/.test(status), '必须从文件尾部有界读取');
+    assert(!/readFileSync\(file, 'utf8'\)\.split\('\\n'\)/.test(status), '不许退回全量读整个日志文件');
+    // eslint-disable-next-line no-new-func
+    const compileTail = (body) => new Function(
+      'lock', 'deps',
+      `const { resolve, openSync, fstatSync, readSync, closeSync, LOG_TAIL_LINES, TAIL_CHUNK_BYTES, TAIL_MAX_BYTES } = deps;\n${body}\n`,
+    );
+    const readTail = compileTail(tail[1]);
+    const deps = {
+      resolve, openSync, fstatSync, readSync, closeSync,
+      LOG_TAIL_LINES: 400,
+      TAIL_CHUNK_BYTES: 64 * 1024,
+      TAIL_MAX_BYTES: 8 * 1024 * 1024,
+    };
+    const dir = join(RUN_DIR, 'a18-log-tail');
+    mkdirSync(dir, { recursive: true });
+    const naive = (text) => text.split('\n').filter((line) => line.trim()).slice(-400);
+    const cases = [
+      ['empty', ''],
+      ['few', '{"i":1}\n{"i":2}\n\n{"i":3}\n'],
+      ['many', `${Array.from({ length: 1200 }, (_, i) => JSON.stringify({ type: 'log', line: `第 ${i} 行 中文 ${'y'.repeat(48)}` })).join('\n')}\n`],
+      ['long-lines', `${Array.from({ length: 500 }, (_, i) => JSON.stringify({ type: 'log', line: `${'x'.repeat(300)}${i}` })).join('\n')}\n`],
+      ['crlf', `${Array.from({ length: 430 }, (_, i) => `{"i":${i}}`).join('\r\n')}\r\n`],
+      ['blanks', `${Array.from({ length: 500 }, (_, i) => (i % 3 ? `{"i":${i}}` : '   ')).join('\n')}\n`],
+    ];
+    for (const [name, text] of cases) {
+      const file = join(dir, `${name}.jsonl`);
+      writeFileSync(file, text, 'utf8');
+      eq(readTail({ logFile: file }, deps), naive(text), `日志尾部 ${name} 应与全量读一致`);
+    }
+    eq(readTail({ logFile: join(dir, 'missing.jsonl') }, deps), [], '日志文件不存在时返回空数组');
+    eq(readTail(null, deps), [], '没有锁时返回空数组');
+
+    // 变异：把返回的尾部行数改错，上面的等价性断言必须真的报红 ——
+    // 否则这一组只是读了几份文本，证明不了自己在比。
+    const mutated = tail[1].replace('return lines.slice(-LOG_TAIL_LINES);', 'return lines.slice(-10);');
+    assert(mutated !== tail[1], '变异没生效：函数体里找不到尾部切片');
+    const brokenTail = compileTail(mutated);
+    const manyText = cases.find(([name]) => name === 'many')[1];
+    assert(
+      JSON.stringify(brokenTail({ logFile: join(dir, 'many.jsonl') }, deps)) !== JSON.stringify(naive(manyText)),
+      '把尾部行数改错后，等价性断言必须能抓到',
+    );
   });
 }
 
