@@ -803,7 +803,7 @@ function simulateInstalled(dir) {
     // ② 清单加载失败时错误只渲染一遍，重试成功后不留旧横幅。
     assert(/v-if="state\.error && !loading"/.test(setup), '骨架态已显示错误，页面级横幅必须排除 loading');
     assert(
-      /function load\(\): Promise<void> \{[\s\S]{0,600}?state\.error = '';/.test(composable),
+      /function load\(attempt = 0\): Promise<void> \{[\s\S]{0,900}?state\.error = '';/.test(composable),
       'load 重试要清掉上一轮的失败原因',
     );
 
@@ -912,7 +912,8 @@ function simulateInstalled(dir) {
     assert(/没有匹配/.test(picker), '过滤无结果必须明说，不许静默空白');
 
     // ② 智能跟随的「回到底部」：跟随暂停时才出现，点击回底并恢复跟随。
-    assert(/logs\.length && !followBottom/.test(panel), '回到底部按钮必须只在「有日志且未跟随」时出现');
+    //    判据是**看得见的行数**（visibleLogs）：只看错误时，新来的 info 行不该把视口拉一次。
+    assert(/visibleLogs\.length && !followBottom/.test(panel), '回到底部按钮必须只在「有可见日志且未跟随」时出现');
     assert(
       /function resumeFollow\(\): void \{[\s\S]{0,200}?followBottom\.value = true;[\s\S]{0,200}?scrollHeight/.test(panel),
       '回到底部必须同时恢复跟随并真的滚到底',
@@ -933,6 +934,99 @@ function simulateInstalled(dir) {
       '复制安装命令必须整段（按展示顺序）进剪贴板',
     );
     assert(/preview__h3-row/.test(preview) && /\.preview__h3-row \{/.test(css), '标题行内按钮的排布要有样式落点');
+  });
+
+  g.check('A20 第六轮：日志尾部增量合并、请求体上限、清单自动重试与进度条', async () => {
+    const composable = readFileSync(join(TEMPLATE_ROOT, 'app/utils/wizard/useWizard.ts'), 'utf8');
+    const panel = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/ProgressStream.vue'), 'utf8');
+    const css = readFileSync(join(TEMPLATE_ROOT, 'app/assets/styles/wizard.css'), 'utf8');
+    const bodyGuard = readFileSync(join(TEMPLATE_ROOT, 'server/utils/wizard/body.ts'), 'utf8');
+    const modulePath = join(TEMPLATE_ROOT, 'app/utils/wizard/log-tail.mjs');
+    const source = readFileSync(modulePath, 'utf8');
+
+    // ① 纯函数：直接 import 页面真正用的那一份，用「首轮 / 追加 / 未变 / 窗口滑动 / 断点」验证。
+    //    不复制一份实现在测试里 —— 复制出来的那份再绿，也证明不了页面上跑的是对的。
+    const { mergeLogTail } = await import(modulePath);
+    const line = (i) => JSON.stringify({ type: 'log', line: `第 ${i} 行` });
+    const lines = Array.from({ length: 20 }, (_, i) => line(i));
+    eq(mergeLogTail([], lines.slice(0, 3)), { reuse: 0, added: lines.slice(0, 3) }, '首轮应全部视为新增');
+    eq(mergeLogTail(lines.slice(0, 5), lines.slice(0, 8)), { reuse: 5, added: lines.slice(5, 8) }, '追加只应产出新增行');
+    eq(mergeLogTail(lines.slice(0, 8), lines.slice(0, 8)), { reuse: 8, added: [] }, '尾部未变时不应新增');
+    eq(mergeLogTail(lines.slice(0, 10), lines.slice(5, 15)), { reuse: 5, added: lines.slice(10, 15) }, '窗口滑动要按接缝复用');
+    eq(mergeLogTail(lines.slice(0, 4), []), { reuse: 0, added: [] }, '空尾部不应拖进旧行');
+    const foreign = ['{"type":"log","line":"换了一个日志文件"}'];
+    eq(mergeLogTail(lines.slice(0, 4), foreign), { reuse: 0, added: foreign }, '接不上就整段重建');
+
+    // 变异：删掉「逐行核对」，首行撞上就会被当成接缝。常规样本（真正的接缝）仍会绿，
+    // 所以另设一组「首行撞上、后面不同」的样本 —— 改坏之后它必须给出不同结果。
+    const trapPrev = ['A', 'B', 'C'];
+    const trapNext = ['B', 'X'];
+    eq(mergeLogTail(trapPrev, trapNext), { reuse: 0, added: trapNext }, '首行撞上但后续不同，必须整段重建');
+    const mutation = 'if (existing[start + i] !== incoming[i]) return { reuse: 0, added: incoming.slice() };';
+    assert(source.includes(mutation), '变异没生效：log-tail.mjs 里找不到逐行核对那一行');
+    const broken = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(source.replace(mutation, ''))}`);
+    eq(broken.mergeLogTail(trapPrev, trapNext).added.length, 0, '去掉逐行核对后必须把新增行误判成已见过（否则本断言是装饰）');
+
+    // ② 界面接上增量合并：查询路径逐行追加，新一轮初始化清掉上一轮的尾部。
+    assert(
+      /import \{ mergeLogTail \} from '~\/utils\/wizard\/log-tail\.mjs'/.test(composable),
+      'useWizard 必须 import 增量合并模块',
+    );
+    assert(
+      /function appendRemoteLogs[\s\S]{0,1200}?mergeLogTail\(lastRemoteLogRaw, rawLines\)[\s\S]{0,1200}?pushLog\(line\.level, line\.line\)/.test(composable),
+      '轮询日志必须逐行追加（pushLog），不许整段替换',
+    );
+    assert(!/state\.logs = logsFromRemote\(logLines\)/.test(composable), '查询路径不许整段重建日志（会换掉全部 key）');
+    assert(
+      /function start\(\): Promise<void> \{[\s\S]{0,1800}?lastRemoteLogRaw = \[\];/.test(composable),
+      'start 要清掉上一轮的日志尾部（否则新一轮首轮会被判成「没变化」）',
+    );
+
+    // ③ 候选清单的自动重试：瞬时失败先自愈，仍失败才落到失败态。
+    assert(/const LOAD_RETRY_DELAYS = \[/.test(composable), '自动重试要有明确的节奏常量');
+    assert(
+      /const delay = LOAD_RETRY_DELAYS\[attempt\];[\s\S]{0,800}?loadTimer = setTimeout\(/.test(composable),
+      '首次加载失败要排队自动重试',
+    );
+    assert(
+      /function retry\(\): void \{[\s\S]{0,500}?cancelLoadRetry\(\);/.test(composable),
+      'retry 要顶掉排队中的自动重试（两条路不许同时打接口）',
+    );
+    // 清单请求不许覆盖已经跑起来的进度：进度页刷新时清单与锁状态是并行拉的。
+    assert(
+      /const quiet = state\.status === 'running' \|\| state\.status === 'done';/.test(composable)
+        && /if \(quiet\) return;/.test(composable),
+      '清单加载失败时不许把 running / done 打回骨架态或失败态',
+    );
+
+    // ④ 请求体上限：两条 POST 共用同一个读取函数，且不许自己 readBody。
+    assert(/MAX_SELECTION_BODY_BYTES = 64 \* 1024/.test(bodyGuard), '请求体上限应为 64 KB（与导入文件一致）');
+    assert(/content-length/.test(bodyGuard) && /statusCode: 413/.test(bodyGuard), '要先按 content-length 拦 413');
+    for (const [file, name] of [
+      ['server/api/wizard/plan.post.ts', '/plan'],
+      ['server/api/wizard/init.post.ts', '/init'],
+    ]) {
+      const handler = readFileSync(join(TEMPLATE_ROOT, file), 'utf8');
+      assert(/readSelectionBody\(event\)/.test(handler), `${name} 必须走共用读取函数`);
+      assert(!/readBody</.test(handler), `${name} 不许自己读 body（会绕过体积上限）`);
+    }
+
+    // ⑤ 进度条与「只看错误」：两者都要有语义与样式落点。
+    assert(/<progress[\s\S]{0,300}?:value="progressPercent"/.test(panel), '进度页要有阶段进度条');
+    assert(/aria-label="progressLabel"/.test(panel), '进度条要有无障碍文本（光有百分比不够）');
+    assert(/\.steps__meter \{/.test(css) && /::-webkit-progress-value/.test(css), '进度条要有样式（含 webkit 伪元素）');
+    assert(/aria-pressed="errorOnly"/.test(panel), '「只看错误」要声明为开关（aria-pressed）');
+    assert(/v-for="entry in visibleLogs"/.test(panel), '日志列表要渲染过滤后的可见行');
+    assert(
+      /function toggleErrorOnly[\s\S]{0,400}?followBottom\.value = true;/.test(panel),
+      '切换过滤后要恢复跟随并回到底部',
+    );
+
+    // ⑥ 失败原因要主动宣告 + 新增文件必须进删除白名单（否则会留在产物里）。
+    assert(/class="hint hint--block" role="alert"/.test(panel), '进度页错误横幅要有 role="alert"');
+    for (const rel of ['app/utils/wizard/log-tail.mjs', 'server/utils/wizard/body.ts']) {
+      assert(WIZARD_FILES.includes(rel), `${rel} 必须进删除白名单`);
+    }
   });
 }
 

@@ -52,14 +52,38 @@ const logBox = ref<HTMLElement | null>(null);
  */
 const followBottom = ref(true);
 
+/**
+ * 「只看错误」：日志一长（安装阶段动辄三百多行），失败原因被埋在中间时，
+ * 唯一有用的那几行最难找。过滤只影响**展示**，日志数组本身不动 ——
+ * 复制 / 下载仍然导出全部，排障时给维护者的东西不该因为视图开关而变少。
+ */
+const errorOnly = ref(false);
+const errorCount = computed(() => props.logs.filter((entry) => entry.level === 'error').length);
+const visibleLogs = computed(() =>
+  errorOnly.value ? props.logs.filter((entry) => entry.level === 'error') : props.logs);
+
 function onLogScroll(): void {
   const el = logBox.value;
   if (!el) return;
   followBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 }
 
+/**
+ * 切换过滤视图：两个方向都回到最新一行，并恢复跟随。
+ * 过滤后的列表与「上次读到的位置」没有对应关系，停在那儿只会显示一段来历不明的中间内容。
+ */
+function toggleErrorOnly(): void {
+  errorOnly.value = !errorOnly.value;
+  followBottom.value = true;
+  void nextTick(() => {
+    if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
+  });
+}
+
+/* 跟随的判据是**看得见的行数**：只看错误时，新来的 info 行不会改变展示，
+   此时还把视口拉一次纯属浪费（也让人以为列表在跳）。 */
 watch(
-  () => props.logs.length,
+  () => visibleLogs.value.length,
   async () => {
     if (!followBottom.value) return;
     await nextTick();
@@ -90,6 +114,38 @@ function stepClass(index: number): Record<string, boolean> {
 function stepCurrent(index: number): 'step' | undefined {
   return index === props.stageIndex && props.status === 'running' ? 'step' : undefined;
 }
+
+/**
+ * 阶段进度条：把「第几个阶段」变成一个能一眼读完的量。
+ *
+ * 步骤条的胶囊块回答「在哪一步」，但它需要逐个读标签；一条进度条回答
+ * 「还剩多少」。初始化动辄几分钟，后者才是用户真正在问的问题。
+ *
+ * 百分比按**已完成的阶段数**算（进入 plan 时是 0%，不是 20%）：把「正在做的
+ * 那一步」算成已完成会让人以为比实际更快，随后的等待就显得像卡住。
+ * 用原生 <progress>：语义（role=progressbar / 值 / 无障碍文本）与外观分离，
+ * 不需要在模板里写行内 style 表达宽度，也就不会破坏「布局只写在样式表里」这条纪律。
+ */
+const stageNumber = computed(() => {
+  if (props.status === 'done') return props.stages.length;
+  if (props.stageIndex < 0) return 0;
+  return Math.min(props.stageIndex + 1, props.stages.length);
+});
+
+const progressPercent = computed(() => {
+  if (props.status === 'done') return 100;
+  if (!props.stages.length) return 0;
+  const done = Math.min(Math.max(props.stageIndex, 0), props.stages.length);
+  return Math.round((done / props.stages.length) * 100);
+});
+
+/** 进度条的无障碍文本：光有百分比，读屏用户不知道「剩下的是哪几步」。 */
+const progressLabel = computed(() => {
+  if (props.status === 'done') return `初始化已完成，${props.stages.length} 个阶段全部结束`;
+  if (props.stageIndex < 0) return '尚未进入任何阶段';
+  const stage = props.stages[props.stageIndex];
+  return `第 ${stageNumber.value} / ${props.stages.length} 步${stage ? `：${stage.label}` : ''}`;
+});
 
 /**
  * 完成提示里的启动命令。包管理器是引擎按 lockfile 探测的事实，不是固定值 ——
@@ -266,8 +322,22 @@ onUnmounted(() => {
       </li>
     </ol>
 
-    <p v-if="elapsedText" class="steps__elapsed">
-      已运行 {{ elapsedText }}
+    <!-- 进度条与步骤条并列：步骤条回答「在哪」，进度条回答「还剩多少」。
+         value 取「已完成阶段数」，所以进入第一步时是 0%、全部结束才是 100%。 -->
+    <progress
+      class="steps__meter"
+      :value="progressPercent"
+      max="100"
+      :aria-label="progressLabel"
+    >{{ progressPercent }}%</progress>
+    <!-- 阶段序号与已运行时长合成一行：两者都是「一眼扫过」的量，
+         拆成两段只会让进度区多占一行高度。 -->
+    <p v-if="stageNumber || elapsedText" class="steps__elapsed">
+      <template v-if="stageNumber">
+        {{ status === 'done' ? `全部 ${stages.length} 步已完成` : `第 ${stageNumber} / ${stages.length} 步` }}
+      </template>
+      <template v-if="stageNumber && elapsedText"> · </template>
+      <template v-if="elapsedText">已运行 {{ elapsedText }}</template>
     </p>
     <!-- 终态的总耗时：结束时怎么收的场（成功 / 失败）、花了多久，事后核对有用；
          只在本次会话里 watch 到过 running → 终态的迁移才显示，不靠猜。 -->
@@ -298,7 +368,9 @@ onUnmounted(() => {
       状态查询暂时失败（网络抖动或开发服务正在重启），下一轮会自动重试，无需刷新页面。
     </div>
 
-    <div v-if="error" class="hint hint--block">
+    <!-- role="alert"：失败原因由后台状态推进出来（不是用户操作的结果），
+         读屏用户不主动巡视这块区域，只能靠主动宣告。 -->
+    <div v-if="error" class="hint hint--block" role="alert">
       {{ error }}
     </div>
 
@@ -317,10 +389,24 @@ onUnmounted(() => {
     </div>
 
     <details class="preview" open>
-      <summary>执行摘要与原始日志（{{ logs.length }} 行）</summary>
+      <summary>
+        执行摘要与原始日志（{{ logs.length }} 行<template v-if="errorOnly">，当前仅显示 {{ visibleLogs.length }} 行</template>）
+      </summary>
 
-      <!-- 复制的是展示层文本（事件已被翻译成可读行）：排障时用户看到什么就能贴什么 -->
+      <!-- 复制 / 下载取的是展示层文本（事件已被翻译成可读行）：排障时用户看到什么就能贴什么。
+           注意与「只看错误」无关 —— 三个按钮里只有视图是开关，导出永远是全部。 -->
       <div class="log-tools">
+        <button
+          type="button"
+          :disabled="!logs.length"
+          :aria-pressed="errorOnly"
+          :title="errorCount
+            ? `只显示 error 级日志（共 ${errorCount} 行）；复制与下载不受影响，仍是全部日志`
+            : '当前没有 error 级日志'"
+          @click="toggleErrorOnly()"
+        >
+          只看错误（{{ errorCount }}）
+        </button>
         <button
           type="button"
           :disabled="!logs.length"
@@ -372,11 +458,11 @@ onUnmounted(() => {
            「回到底部」按钮锚在日志框的右下角，随日志滚动条独立于页面滚动。 -->
       <div class="log-wrap">
         <div ref="logBox" class="log" role="log" @scroll="onLogScroll">
-          <p v-if="!logs.length" class="preview__empty">
-            暂无输出。
+          <p v-if="!visibleLogs.length" class="preview__empty">
+            {{ errorOnly ? '本次执行没有 error 级日志，再点一下「只看错误」按钮即可看完整输出。' : '暂无输出。' }}
           </p>
           <p
-            v-for="entry in logs"
+            v-for="entry in visibleLogs"
             :key="entry.id"
             class="log__line"
             :class="{ 'log__line--error': entry.level === 'error' }"
@@ -386,7 +472,7 @@ onUnmounted(() => {
         </div>
         <!-- 在场即状态：上翻暂停了智能跟随时才出现，点一下回到底部并恢复跟随。 -->
         <button
-          v-if="logs.length && !followBottom"
+          v-if="visibleLogs.length && !followBottom"
           type="button"
           class="log-follow"
           title="已暂停自动跟随，点击回到最新日志并恢复跟随"

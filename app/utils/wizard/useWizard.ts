@@ -19,6 +19,8 @@
  */
 import { computed, reactive } from 'vue';
 import { assertShape, normalizeSelection } from '#shared/wizard/plan.mjs';
+// 只做纯计算（尾部窗口的接缝在哪），随引导器一起删除，见文件头「产物干净」那条纪律。
+import { mergeLogTail } from '~/utils/wizard/log-tail.mjs';
 import type {
   Conflict,
   InitPlan,
@@ -74,6 +76,16 @@ const POLL_INTERVAL_MS = 2000;
  */
 const STATUS_TIMEOUT_MS = 10_000;
 
+/**
+ * 首次加载候选清单的重试节奏（毫秒）。dev 服务刚起、HMR 重启的间隙里第一次 /schema
+ * 常常直接失败 —— 那时页面会停在一块「读取失败」的死界面上，而用户什么都没做错。
+ * 先按固定节奏自动重试，仍失败才落到失败态、把决定权交回用户（重试按钮仍在）。
+ */
+const LOAD_RETRY_DELAYS = [400, 1200];
+
+/** 绝大多数分组没有禁用项：共用一个冻结的空集，省掉每次渲染每组一个新 Set。 */
+const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+
 const state = reactive({
   status: 'idle' as WizardStatus,
   mode: 'idle' as WizardMode,
@@ -106,9 +118,14 @@ const state = reactive({
 });
 
 /**
- * 上一轮 /status 日志尾部的签名（行数 + 最后一行）。日志文件只追加，
- * 签名不变就说明这 2 秒里什么都没发生 —— 此时跳过整段替换，省掉一次
- * 最多 800 行的全量重渲（轮询是常态路径，绝大多数轮次都在这个快路径上）。
+ * 上一轮 /status 日志尾部的原始行。轮询每 2 秒拿一次尾部窗口，窗口只往后滑；
+ * 留着上一轮才能算出「这一轮真正新增了哪几行」，只给新行发号（见 mergeLogTail）。
+ */
+let lastRemoteLogRaw: string[] = [];
+
+/**
+ * 上一轮 /status 日志尾部的签名（行数 + 最后一行）。签名不变就说明这 2 秒里什么都没发生，
+ * 连合并都不必算 —— 轮询是常态路径，绝大多数轮次都在这个快路径上。
  */
 let lastRemoteLogSig = '';
 
@@ -125,6 +142,14 @@ let statusInFlight = 0;
 
 let streamController: AbortController | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** 排队中的清单自动重试。成功后自然为 null；手动重试 / 新一轮初始化会把它顶掉。 */
+let loadTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelLoadRetry(): void {
+  if (!loadTimer) return;
+  clearTimeout(loadTimer);
+  loadTimer = null;
+}
 /**
  * 轮询的「意愿」标记：pollTimer 只表示「现在有没有定时器在跑」，
  * 而 pollWanted 表示「这条通道是否还应该轮询」。标签页隐藏时我们主动停掉
@@ -175,6 +200,7 @@ async function describeFailure(res: Response): Promise<string> {
   if (res.status === 403) return `令牌校验失败（403）：${detail}。刷新页面会拿到新令牌。`;
   if (res.status === 404) return `接口不存在（404）：${detail}。开发服务可能不是以 dev 模式启动的。`;
   if (res.status === 409) return `已存在初始化锁（409）：${detail}`;
+  if (res.status === 413) return `请求体过大（413）：${detail}`;
   if (res.status === 422) return `选择存在阻断级冲突（422）：${detail}`;
   if (res.status === 400) return `选择不合法（400）：${detail}`;
   return `${res.status} ${detail}`;
@@ -349,8 +375,6 @@ export function useWizard() {
   });
 
   /** 某个分组里不可选的 value 集合，传给 OptionGroup 置灰卡片。 */
-  // 空集是绝大多数调用的结果：共用一个冻结的实例，省掉每次渲染每组一个新 Set。
-  const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
   function blockedFor(key: string): ReadonlySet<string> {
     return blocked.value.get(key) ?? EMPTY_BLOCKED;
   }
@@ -368,14 +392,34 @@ export function useWizard() {
     void router.replace({ query });
   }
 
-  /** 加载候选清单。骨架态 → selecting 的唯一入口。 */
-  async function load(): Promise<void> {
-    if (state.schema || state.status === 'loading') return;
-    state.status = 'loading';
-    state.message = '正在读取候选清单…';
-    // 重新加载要把上一轮的失败原因清掉：成功路径原本从来不清 state.error，
-    // 于是「清单读取失败 → 点重试 → 成功」之后那条红色横幅会永远留在页面上。
-    state.error = '';
+  /**
+   * 加载候选清单。骨架态 → selecting 的唯一入口。
+   *
+   * attempt > 0 表示这是自动重试：只在 LOAD_RETRY_DELAYS 里排过队才会走到这里。
+   * 每次尝试都重新清空 state.error —— 否则「失败 → 重试成功」之后那条红色横幅
+   * 会永远留在页面上（这是此前真实踩过的坑）。
+   */
+  async function load(attempt = 0): Promise<void> {
+    if (state.schema) return;
+    if (attempt === 0) {
+      if (state.status === 'loading') return;
+      // 手动重试要顶掉排队中的自动重试，避免两条路同时打同一个接口。
+      cancelLoadRetry();
+    }
+    /**
+     * 「页面上已经有更权威的状态」时，清单请求不许动 status / message / error。
+     * 进度页刷新时清单与锁状态是**并行**拉的：锁那边可能已经判成 running，
+     * 一次失败的 /schema 不该把它打回骨架态；engine 上报的错误也不该被这里清掉。
+     * 清单只负责翻译分组标签（见 ProgressStream.selectionSummary），缺了它不影响进度。
+     */
+    const quiet = state.status === 'running' || state.status === 'done';
+    if (!quiet) {
+      state.status = 'loading';
+      state.message = attempt === 0
+        ? '正在读取候选清单…'
+        : `候选清单读取失败，正在第 ${attempt + 1} 次尝试…`;
+      state.error = '';
+    }
     try {
       const res = await apiFetch('/schema');
       if (!res.ok) throw new Error(await describeFailure(res));
@@ -387,6 +431,21 @@ export function useWizard() {
       state.status = 'selecting';
       state.message = '';
     } catch (err) {
+      const delay = LOAD_RETRY_DELAYS[attempt];
+      if (delay !== undefined) {
+        // 仍停在骨架态而不是失败态：一句话说明「正在再试」，重试按钮此刻出现只会误导。
+        if (!quiet) {
+          state.status = 'loading';
+          state.message = `候选清单读取失败，${delay / 1000} 秒后自动重试（${attempt + 1} / ${LOAD_RETRY_DELAYS.length}）…`;
+        }
+        loadTimer = setTimeout(() => {
+          loadTimer = null;
+          void load(attempt + 1);
+        }, delay);
+        return;
+      }
+      // 正在跑 / 已经跑完：清单读取失败不该被渲染成「初始化失败」，静默收场。
+      if (quiet) return;
       state.status = 'failed';
       // 不能清空成 ''：骨架上的文案会回落成「正在读取候选清单…」，
       // 于是一个已经失败、永远不会有结果的页面，看着像还在加载。
@@ -515,21 +574,49 @@ export function useWizard() {
     }
   }
 
-  /** /status 返回的事件尾部 → 展示日志。解析失败的单行原样展示，不让一行坏数据炸掉整段。 */
+  /** 一行原始事件 → 一条展示日志。解析失败的单行原样展示，不让一行坏数据炸掉整段。 */
+  function logLineFor(raw: string): LogPayload | null {
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return { level: 'info', line: raw };
+    }
+    return logForEvent(event, raw);
+  }
+
+  /** 整段重建（首轮、或日志文件被替换过）。只在增量合并判定「接不上」时才走。 */
   function logsFromRemote(rawLines: string[]): LogLine[] {
     const out: LogLine[] = [];
     for (const raw of rawLines) {
-      let event: Record<string, unknown>;
-      try {
-        event = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        out.push({ level: 'info', line: raw });
-        continue;
-      }
-      const line = logForEvent(event, raw);
+      const line = logLineFor(raw);
       if (line) out.push({ id: ++logSeq, ...line });
     }
     return out;
+  }
+
+  /**
+   * 轮询通道的日志写入：只给**新增的行**发号并追加，已有行原样留着。
+   *
+   * 为什么不在每轮整段替换：日志文件只追加，尾部窗口只是往后滑，绝大多数轮次里
+   * 前 399 行与上一轮逐字相同。整段替换会给所有行重新发 id，Vue 拿到的是
+   * 「800 个 key 全变了」，只能全部卸载重建 —— 代价与「多了一行」完全不成比例，
+   * 而安装阶段每秒都在吐字，这就是滚动的卡顿来源。
+   */
+  function appendRemoteLogs(rawLines: string[]): void {
+    const { reuse, added } = mergeLogTail(lastRemoteLogRaw, rawLines);
+    lastRemoteLogRaw = rawLines.slice();
+    // 尾部窗口一行都没动：一个节点都不用碰（快路径，绝大多数轮次走这里）。
+    if (reuse === rawLines.length) return;
+    // 接不上（首轮、日志文件被替换、行被截断）：老实整段重建。
+    if (reuse === 0) {
+      state.logs = logsFromRemote(rawLines);
+      return;
+    }
+    for (const raw of added) {
+      const line = logLineFor(raw);
+      if (line) pushLog(line.level, line.line);
+    }
   }
 
   function handleEvent(raw: string): void {
@@ -623,6 +710,8 @@ export function useWizard() {
     state.error = '';
     state.enginePlan = null;
     state.pollDegraded = false;
+    cancelLoadRetry();
+    lastRemoteLogRaw = [];
     lastRemoteLogSig = '';
     lastRemoteSig = '';
     installUnloadGuard();
@@ -743,14 +832,14 @@ export function useWizard() {
       }
       if (state.pollDegraded) state.pollDegraded = false;
 
-      // 轮询通道的日志：整段替换而不是增量合并 —— 日志文件只追加，
-      // 尾部天然覆盖上一轮读到的内容；实时流在场时不动它（两条时序独立，别互相踩）。
-      // 签名（行数 + 最后一行）没变就整段跳过：轮询大多数轮次日志都不会变。
+      // 轮询通道的日志：日志文件只追加，交给 appendRemoteLogs 做增量追加
+      // （见它的注释：整段替换会让 800 个节点全换 key）。实时流在场时不动它，
+      // 两条时序独立，别互相踩。签名没变就整段跳过 —— 轮询大多数轮次日志都不会变。
       if (state.mode !== 'stream' && logLines?.length) {
         const sig = `${logLines.length}:${logLines[logLines.length - 1] ?? ''}`;
         if (sig !== lastRemoteLogSig) {
           lastRemoteLogSig = sig;
-          state.logs = logsFromRemote(logLines);
+          appendRemoteLogs(logLines);
         }
       }
 
@@ -870,12 +959,14 @@ export function useWizard() {
   function retry(): void {
     stopPolling();
     removeUnloadGuard();
+    cancelLoadRetry();
     state.error = '';
     state.exitCode = null;
     state.stageIndex = -1;
     state.startedAt = null;
     state.pollDegraded = false;
     // 新一轮初始化不该沿用上一轮的状态/日志签名，否则首轮查询会被误判成「没变化」。
+    lastRemoteLogRaw = [];
     lastRemoteLogSig = '';
     lastRemoteSig = '';
     state.status = state.schema ? 'selecting' : 'idle';

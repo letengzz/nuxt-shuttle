@@ -265,7 +265,8 @@ async function onInit(): Promise<void> {
            等于让人在「刚改过的表单项」和「正在跑的进度」之间分走注意力。 -->
       <!-- 骨架态的错误已经在上面那块里显示过了：这里再加 v-if="state.error" 会渲染两遍。 -->
       <div v-if="state.error && !loading" class="wizard__full">
-        <div class="hint hint--block">
+        <!-- role="alert"：这类错误来自接口而不是用户操作，读屏用户不会去巡视它。 -->
+        <div class="hint hint--block" role="alert">
           {{ state.error }}
         </div>
       </div>

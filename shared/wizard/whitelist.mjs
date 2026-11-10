@@ -26,6 +26,8 @@ export const WIZARD_FILES = [
   'app/components/wizard/ProgressActions.vue',
   'app/utils/wizard/option-model.ts',
   'app/utils/wizard/useWizard.ts',
+  // 纯函数：轮询日志尾部的增量合并（自测直接 import 它，见 selftest A20）
+  'app/utils/wizard/log-tail.mjs',
   'app/assets/styles/wizard.css',
   // 服务端引导区
   'server/api/wizard/schema.get.ts',
@@ -36,6 +38,8 @@ export const WIZARD_FILES = [
   'server/utils/wizard/validate.ts',
   'server/utils/wizard/guard.ts',
   'server/utils/wizard/stream.ts',
+  // 两个 POST 接口共用的 body 读取（含 64 KB 上限）
+  'server/utils/wizard/body.ts',
   // dev-only 的令牌注入插件：它的唯一作用是给选择页发令牌，页面没了它就没有意义
   'server/plugins/wizard-token.ts',
 ];
