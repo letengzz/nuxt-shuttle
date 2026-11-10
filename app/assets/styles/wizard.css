@@ -677,9 +677,35 @@ html:has(dialog[open]) {
   color: var(--fg-muted);
 }
 
+/* 「回到底部」按钮的定位容器：按钮锚在日志框右下角，随滚动停在那里，
+   不随内容滚走。 */
+.log-wrap {
+  position: relative;
+}
+
 .log {
   max-height: 320px;
   overflow: auto;
+  /* 日志滚到头时别把滚动「漏」给页面：读日志时一个惯性滚动就把整页带走的
+     手感非常糟。contain 只挡住本容器的越界链动，页面其余滚动不受影响。 */
+  overscroll-behavior: contain;
+  /* 滚动条出现/消失时不让内容横向跳一下：日志行数突破一屏的瞬间，
+     没有这条规则，整行文字会被挤压重排一次。 */
+  scrollbar-gutter: stable;
+}
+
+/* 智能跟随暂停时的「回到底部」：悬在日志框右下角的小浮钮。
+   在场本身就是状态指示（没跟随了），点击一键恢复跟随。 */
+.log-follow {
+  position: absolute;
+  right: var(--sp-3);
+  bottom: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
 }
 
 /* 日志区上方的小工具条：目前只有「复制日志」。按钮退成小号灰字，
@@ -694,6 +720,31 @@ html:has(dialog[open]) {
 
 .log-tools button {
   padding: var(--sp-1) var(--sp-3);
+  font-size: var(--text-sm);
+}
+
+/* 预览弹窗标题行右侧的小按钮（如安装命令的「复制」）：与 log-tools 同风格，
+   但要和 h3 的基线对齐，所以单独一条。 */
+.log-tools__btn {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--text-sm);
+}
+
+/* 预览弹窗里「标题 + 行内小按钮」的排布。 */
+.preview__h3-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+/* 「新增」弹窗的搜索框：占满一行、与下方候选项留一口气。 */
+.picker-search {
+  width: 100%;
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   font-size: var(--text-sm);
 }
 

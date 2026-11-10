@@ -112,6 +112,32 @@ const note = computed(() => {
 
 /** 将执行的安装命令 —— 与引擎 install 阶段同一个函数算出来，逐字一致。 */
 const installCommandList = computed(() => (props.plan ? installCommands(props.plan) : []));
+
+/**
+ * 一键复制安装命令。--skip-install 跑完的仓库、或想在别处复现依赖的人，
+ * 要的就是逐条照敲 —— 与其在 <code> 里手动圈选多行，不如整段进剪贴板。
+ * 剪贴板被拒（非安全上下文）时按钮退成「复制失败」两秒，命令本来就展示着，不丢功能。
+ */
+const commandCopyState = ref<'idle' | 'copied' | 'failed'>('idle');
+let commandCopyTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function copyInstallCommands(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(installCommandList.value.join('\n'));
+    commandCopyState.value = 'copied';
+  } catch {
+    commandCopyState.value = 'failed';
+  }
+  if (commandCopyTimer) clearTimeout(commandCopyTimer);
+  commandCopyTimer = setTimeout(() => {
+    commandCopyState.value = 'idle';
+    commandCopyTimer = null;
+  }, 2500);
+}
+
+onUnmounted(() => {
+  if (commandCopyTimer) clearTimeout(commandCopyTimer);
+});
 </script>
 
 <template>
@@ -190,7 +216,18 @@ const installCommandList = computed(() => (props.plan ? installCommands(props.pl
           <!-- 安装命令：与引擎执行的同源同函数。列出来是给「想在跑之前核对到底会
                执行什么」的人看的，也是 --skip-install 之后照着补装的那一份。 -->
           <div>
-            <h3>将执行的安装命令（按顺序）</h3>
+            <h3 class="preview__h3-row">
+              <span>将执行的安装命令（按顺序）</span>
+              <button
+                v-if="installCommandList.length"
+                type="button"
+                class="log-tools__btn"
+                :title="commandCopyState === 'copied' ? '已复制到剪贴板' : '把全部安装命令整段复制到剪贴板'"
+                @click="copyInstallCommands()"
+              >
+                {{ commandCopyState === 'copied' ? '已复制' : commandCopyState === 'failed' ? '复制失败，请手动圈选' : '复制' }}
+              </button>
+            </h3>
             <ul v-if="installCommandList.length" class="preview__list">
               <li v-for="command in installCommandList" :key="command"><code>{{ command }}</code></li>
             </ul>

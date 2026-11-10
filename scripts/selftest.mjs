@@ -827,10 +827,12 @@ function simulateInstalled(dir) {
     );
     includes(composable, 'TimeoutError', '超时要有可操作的文案');
 
-    // ⑤ 下载日志与复制日志共用同一份展示层文本。
-    assert(/logText = computed/.test(panel) && /downloadLogs\(\)/.test(panel), '进度面板要提供下载日志');
+    // ⑤ 下载日志与复制日志共用同一份展示层文本；拼接必须按需（函数），不许退回
+    //    computed —— 高频日志阶段每追加一行都会让 computed 失效并全量 join 800 行。
+    assert(/function buildLogText\(\): string \{/.test(panel) && /downloadLogs\(\)/.test(panel), '进度面板要提供下载日志');
     includes(panel, '下载日志', '下载日志按钮');
-    assert(/copyLogs[\s\S]{0,300}?logText\.value/.test(panel), '复制与下载必须同源');
+    assert(/copyLogs[\s\S]{0,300}?buildLogText\(\)/.test(panel), '复制与下载必须同源');
+    assert(!/logText = computed/.test(panel), '日志全文拼接不许做成 computed（高频追加时是 O(n²) 字符串分配）');
 
     // ⑥ 有界尾部读取：结构钉住 + 与全量读的输出逐一比对。
     //
@@ -883,6 +885,54 @@ function simulateInstalled(dir) {
       JSON.stringify(brokenTail({ logFile: join(dir, 'many.jsonl') }, deps)) !== JSON.stringify(naive(manyText)),
       '把尾部行数改错后，等价性断言必须能抓到',
     );
+  });
+
+  g.check('A19 第五轮：弹窗搜索、跟随恢复按钮、终态耗时与安装命令复制', async () => {
+    // 为什么钉静态结构：这一组都是「要打开对应弹窗 / 上翻日志才看得见」的行为，
+    // 动态路径覆盖不到，只能把关键结构锚在源码上防回归。
+    const picker = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/OptionGroup.vue'), 'utf8');
+    const panel = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/ProgressStream.vue'), 'utf8');
+    const preview = readFileSync(join(TEMPLATE_ROOT, 'app/components/wizard/DependencyPreview.vue'), 'utf8');
+    const css = readFileSync(join(TEMPLATE_ROOT, 'app/assets/styles/wizard.css'), 'utf8');
+
+    // ① 「新增」弹窗搜索：只过滤展示，不动草稿；打开时要重置过滤词。
+    assert(/type="search"/.test(picker), '弹窗里必须有搜索框（type="search"）');
+    assert(
+      /visibleOptions = computed\(\(\) => \{[\s\S]{0,700}?toLowerCase\(\)\.includes/.test(picker),
+      '候选过滤必须按名称 / 说明匹配（大小写不敏感）',
+    );
+    assert(
+      /v-for="opt in visibleOptions"/.test(picker) && /v-for="opt in group\.options"/.test(picker),
+      '弹窗候选列表走过滤后的 visibleOptions，草稿计数仍按全量候选',
+    );
+    assert(
+      /function openPicker\(\): void \{[\s\S]{0,400}?keyword\.value = '';/.test(picker),
+      '每次打开弹窗必须重置搜索词（否则候选看起来「变少了」）',
+    );
+    assert(/没有匹配/.test(picker), '过滤无结果必须明说，不许静默空白');
+
+    // ② 智能跟随的「回到底部」：跟随暂停时才出现，点击回底并恢复跟随。
+    assert(/logs\.length && !followBottom/.test(panel), '回到底部按钮必须只在「有日志且未跟随」时出现');
+    assert(
+      /function resumeFollow\(\): void \{[\s\S]{0,200}?followBottom\.value = true;[\s\S]{0,200}?scrollHeight/.test(panel),
+      '回到底部必须同时恢复跟随并真的滚到底',
+    );
+    assert(/\.log-follow \{[\s\S]{0,300}?position: absolute;/.test(css), '回到底部按钮必须是日志框内的悬浮定位');
+
+    // ③ 终态总耗时 + 计时器自停。
+    assert(
+      /previous === 'running'[\s\S]{0,200}?endedAt\.value = Date\.now\(\)/.test(panel),
+      '终态时刻必须由 watch 捕获（running → 终态的瞬间），不许拿冻结的 now 猜',
+    );
+    assert(/status !== 'running' && tickTimer/.test(panel), '终态后必须彻底拆掉秒级计时器');
+    assert(/totalElapsedText/.test(panel) && /总耗时/.test(panel), '终态要显示总耗时');
+
+    // ④ 预览弹窗的安装命令一键复制。
+    assert(
+      /copyInstallCommands[\s\S]{0,400}?installCommandList\.value\.join\('\\n'\)/.test(preview),
+      '复制安装命令必须整段（按展示顺序）进剪贴板',
+    );
+    assert(/preview__h3-row/.test(preview) && /\.preview__h3-row \{/.test(css), '标题行内按钮的排布要有样式落点');
   });
 }
 

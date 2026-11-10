@@ -67,6 +67,18 @@ watch(
   },
 );
 
+/**
+ * 「回到底部」按钮：智能跟随暂停时才出现，点一下滚回底部并恢复跟随。
+ *
+ * 为什么需要它：跟随暂停本身没有任何视觉提示，上翻读日志的用户可能根本
+ * 不知道「为什么日志不自动滚了」；这个按钮同时是状态指示（在场 = 未跟随）
+ * 和一键恢复 —— 不用解释机制，看到按钮就知道该怎么回去。
+ */
+function resumeFollow(): void {
+  followBottom.value = true;
+  if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight;
+}
+
 function stepClass(index: number): Record<string, boolean> {
   return {
     'is-active': index === props.stageIndex && props.status === 'running',
@@ -106,13 +118,58 @@ onUnmounted(() => {
   if (tickTimer) clearInterval(tickTimer);
 });
 
+/**
+ * 终态后彻底拆掉计时器：running 时的跳过只是省掉重渲，
+ * interval 本身还在每秒醒来一次。初始化跑完页面常被留着一整晚，
+ * 让定时器彻底停摆才是干净的收尾。状态回不到 running？不会 ——
+ * 终态只能由 retry() 重开新一轮，那时组件会重新挂载。
+ */
+watch(
+  () => props.status,
+  (status) => {
+    if (status !== 'running' && tickTimer) {
+      clearInterval(tickTimer);
+      tickTimer = null;
+    }
+  },
+);
+
+/**
+ * 终态时刻：watch 到 status 离开 running 时记下当前时钟。
+ * 「总耗时」要用它 —— 只靠 startedAt 与 now 相减的话，终态后 now 冻结在
+ * 最后一跳，误差能到一整秒；而且失败的瞬间与最后一跳本来就不是一个时刻。
+ * 直接刷新进到终态（startedAt 为空）时不显示总耗时，不猜。
+ */
+const endedAt = ref<number | null>(null);
+watch(
+  () => props.status,
+  (status, previous) => {
+    if ((status === 'done' || status === 'failed') && previous === 'running') {
+      endedAt.value = Date.now();
+    }
+  },
+);
+
+function formatDuration(from: number, to: number): string {
+  const totalSec = Math.max(0, Math.floor((to - from) / 1000));
+  const minutes = Math.floor(totalSec / 60);
+  return minutes ? `${minutes} 分 ${totalSec % 60} 秒` : `${totalSec} 秒`;
+}
+
 const elapsedText = computed(() => {
   if (props.status !== 'running' || !props.startedAt) return '';
   const started = Date.parse(props.startedAt);
   if (!Number.isFinite(started)) return '';
-  const totalSec = Math.max(0, Math.floor((now.value - started) / 1000));
-  const minutes = Math.floor(totalSec / 60);
-  return minutes ? `${minutes} 分 ${totalSec % 60} 秒` : `${totalSec} 秒`;
+  return formatDuration(started, now.value);
+});
+
+/** 终态（done / failed）后的总耗时：结束时刻以 watch 捕获的时钟为准。 */
+const totalElapsedText = computed(() => {
+  if (props.status !== 'done' && props.status !== 'failed') return '';
+  if (!props.startedAt || endedAt.value === null) return '';
+  const started = Date.parse(props.startedAt);
+  if (!Number.isFinite(started)) return '';
+  return formatDuration(started, endedAt.value);
 });
 
 /**
@@ -150,12 +207,20 @@ const selectionSummary = computed(() => {
 const copyState = ref<'idle' | 'copied' | 'failed'>('idle');
 let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** 「复制」与「下载」共用同一份展示层文本，避免两处拼接日后各说各话。 */
-const logText = computed(() => props.logs.map((entry) => entry.line).join('\n'));
+/**
+ * 展示层全文的拼接是**按需**的，不做 computed：日志高频阶段（install 吐字）
+ * 每追加一行都会让 computed 失效，而失效后的下一次读取要重新 join 全部
+ * 800 行 —— 累计是 O(n²) 的字符串分配，换来的只是「复制时少调一个函数」。
+ * 复制 / 下载本来就是用户手动触发的低频动作，那时再拼一次足矣。
+ * 「复制」与「下载」共用这一个函数，避免两处拼接日后各说各话。
+ */
+function buildLogText(): string {
+  return props.logs.map((entry) => entry.line).join('\n');
+}
 
 async function copyLogs(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(logText.value);
+    await navigator.clipboard.writeText(buildLogText());
     copyState.value = 'copied';
   } catch {
     copyState.value = 'failed';
@@ -173,7 +238,7 @@ async function copyLogs(): Promise<void> {
  * 用户看到什么就拿到什么，不必解释 JSON 事件怎么读。
  */
 function downloadLogs(): void {
-  const url = URL.createObjectURL(new Blob([logText.value], { type: 'text/plain;charset=utf-8' }));
+  const url = URL.createObjectURL(new Blob([buildLogText()], { type: 'text/plain;charset=utf-8' }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = `nuxt-shuttle-init-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.log`;
@@ -203,6 +268,11 @@ onUnmounted(() => {
 
     <p v-if="elapsedText" class="steps__elapsed">
       已运行 {{ elapsedText }}
+    </p>
+    <!-- 终态的总耗时：结束时怎么收的场（成功 / 失败）、花了多久，事后核对有用；
+         只在本次会话里 watch 到过 running → 终态的迁移才显示，不靠猜。 -->
+    <p v-if="totalElapsedText" class="steps__elapsed">
+      {{ status === 'done' ? '完成' : '失败' }}，总耗时 {{ totalElapsedText }}
     </p>
 
     <!-- 选择快照：只在「锁还在、引擎计划还没到手」的恢复场景有信息增量；
@@ -298,19 +368,32 @@ onUnmounted(() => {
       </dl>
 
       <!-- role="log"：ARIA 的日志语义自带 polite 宣告，屏幕阅读器知道这里是
-           追加式输出，不会每次更新都从头念一遍。 -->
-      <div ref="logBox" class="log" role="log" @scroll="onLogScroll">
-        <p v-if="!logs.length" class="preview__empty">
-          暂无输出。
-        </p>
-        <p
-          v-for="entry in logs"
-          :key="entry.id"
-          class="log__line"
-          :class="{ 'log__line--error': entry.level === 'error' }"
+           追加式输出，不会每次更新都从头念一遍。外包一层定位容器：
+           「回到底部」按钮锚在日志框的右下角，随日志滚动条独立于页面滚动。 -->
+      <div class="log-wrap">
+        <div ref="logBox" class="log" role="log" @scroll="onLogScroll">
+          <p v-if="!logs.length" class="preview__empty">
+            暂无输出。
+          </p>
+          <p
+            v-for="entry in logs"
+            :key="entry.id"
+            class="log__line"
+            :class="{ 'log__line--error': entry.level === 'error' }"
+          >
+            {{ entry.line }}
+          </p>
+        </div>
+        <!-- 在场即状态：上翻暂停了智能跟随时才出现，点一下回到底部并恢复跟随。 -->
+        <button
+          v-if="logs.length && !followBottom"
+          type="button"
+          class="log-follow"
+          title="已暂停自动跟随，点击回到最新日志并恢复跟随"
+          @click="resumeFollow()"
         >
-          {{ entry.line }}
-        </p>
+          ↓ 回到底部
+        </button>
       </div>
     </details>
   </section>

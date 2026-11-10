@@ -58,9 +58,29 @@ const picker = ref<HTMLDialogElement | null>(null);
  */
 const draft = ref<string[]>([]);
 
+/**
+ * 弹窗内的搜索关键字。候选多的分组（Nuxt 模块十几项）里找一项，
+ * 扫两屏不如敲三个字母。过滤只影响**展示**，不影响草稿：已勾选但被
+ * 过滤掉的项不会被误动，关掉弹窗前草稿始终完整。
+ */
+const keyword = ref('');
+
+/** 按 label / desc / value 过滤，大小写不敏感；空关键字原样返回全部候选。 */
+const visibleOptions = computed(() => {
+  const text = keyword.value.trim().toLowerCase();
+  if (!text) return props.group.options;
+  return props.group.options.filter((opt) =>
+    opt.label.toLowerCase().includes(text)
+    || (opt.desc?.toLowerCase().includes(text) ?? false)
+    || opt.value.toLowerCase().includes(text),
+  );
+});
+
 function openPicker(): void {
   const picked = current.value;
   draft.value = Array.isArray(picked) ? [...picked] : [];
+  // 每次打开都是一次新的挑选：带着上一次的过滤词，用户会以为候选「变少了」。
+  keyword.value = '';
   picker.value?.showModal();
 }
 
@@ -237,8 +257,17 @@ function hintFor(opt: OptionItem): string {
             勾选后点「确定」写回；已选中的取消勾选即为移除。
           </p>
 
+          <!-- 候选多时靠搜索定位：只过滤展示，不动草稿 —— 已勾选但被过滤掉的项依然安全。 -->
+          <input
+            v-model="keyword"
+            type="search"
+            class="picker-search"
+            :placeholder="`搜索 ${group.label} 的候选（名称 / 说明）`"
+            aria-label="过滤候选列表"
+          >
+
           <label
-            v-for="opt in group.options"
+            v-for="opt in visibleOptions"
             :key="opt.value"
             class="pick"
             :class="{ 'is-checked': draft.includes(opt.value), 'is-blocked': blocked.has(opt.value) }"
@@ -263,6 +292,11 @@ function hintFor(opt: OptionItem): string {
               与当前其余选择冲突，不可选。
             </span>
           </label>
+
+          <!-- 过滤无结果要明说：静默的空白会被当成「这个分组没有候选」。 -->
+          <p v-if="!visibleOptions.length" class="panel__empty">
+            没有匹配「{{ keyword.trim() }}」的候选，换个关键词试试。
+          </p>
         </div>
 
         <footer class="modal__foot">
